@@ -443,6 +443,15 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
         meetingId: data.meetingId, // Forward meetingId to auto-join group meeting
       });
       this.logger.log(`📞 Call initiated from ${data.caller?.name} to user ${data.toUserId}${data.meetingId ? ` (group meeting: ${data.meetingId})` : ''}`);
+
+      if (data.caller?.id) {
+        this.userManualPresenceMap.set(data.caller.id, PresenceStatus.BUSY);
+        this.prisma.user.update({
+          where: { id: data.caller.id },
+          data: { presence: PresenceStatus.BUSY },
+        }).catch(() => {});
+        this.server.emit('presence_updated', { id: data.caller.id, presence: PresenceStatus.BUSY });
+      }
     }
   }
 

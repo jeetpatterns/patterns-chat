@@ -2335,25 +2335,26 @@ function WorkspaceShellContent() {
       }
 
       if (idleTimeout) clearTimeout(idleTimeout);
-      // Auto-set AWAY after 3 minutes of inactivity
+      // Auto-set AWAY after 2 minutes of zero user interaction
       idleTimeout = setTimeout(() => {
         if (userPresenceRef.current === 'ONLINE') {
           isAutoAwayRef.current = true;
           handleUpdatePresence('AWAY');
         }
-      }, 3 * 60 * 1000);
+      }, 2 * 60 * 1000);
     }
 
     function handleVisibilityChange() {
       if (document.visibilityState === 'hidden') {
-        // Tab hidden or screen locked: grace period of 60 seconds before setting AWAY
+        // Tab hidden or screen locked: grace period of 2 seconds before setting AWAY
+        // This ensures the socket emits AWAY before the OS puts the tab/process to sleep
         if (visibilityTimeout) clearTimeout(visibilityTimeout);
         visibilityTimeout = setTimeout(() => {
           if (document.visibilityState === 'hidden' && userPresenceRef.current === 'ONLINE') {
             isAutoAwayRef.current = true;
             handleUpdatePresence('AWAY');
           }
-        }, 60 * 1000);
+        }, 2000);
       } else {
         if (visibilityTimeout) {
           clearTimeout(visibilityTimeout);
@@ -2367,6 +2368,14 @@ function WorkspaceShellContent() {
     }
 
     const currentUserId = user.id;
+
+    function handlePageHide() {
+      if (userPresenceRef.current === 'ONLINE') {
+        isAutoAwayRef.current = true;
+        socket.emit('set_presence', { userId: currentUserId, presence: 'AWAY' });
+      }
+    }
+
     function handleBeforeUnload() {
       socket.emit('set_presence', { userId: currentUserId, presence: 'OFFLINE' });
       socket.emit('leave_user', { userId: currentUserId });
@@ -2375,6 +2384,7 @@ function WorkspaceShellContent() {
     const activityEvents = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart'];
     activityEvents.forEach((evt) => window.addEventListener(evt, resetIdleTimer, { passive: true }));
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', handlePageHide);
     window.addEventListener('beforeunload', handleBeforeUnload);
 
     resetIdleTimer();
@@ -2384,6 +2394,7 @@ function WorkspaceShellContent() {
       if (visibilityTimeout) clearTimeout(visibilityTimeout);
       activityEvents.forEach((evt) => window.removeEventListener(evt, resetIdleTimer));
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pagehide', handlePageHide);
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, [user?.id, token]);
@@ -2866,6 +2877,7 @@ function WorkspaceShellContent() {
     setCallPeer(null);
     setIncomingCall(null);
     setCallDuration(0);
+    handleUpdatePresence('ONLINE');
     setIsMicMuted(false);
     setIsVideoMuted(false);
     setIsScreenSharing(false);
@@ -2904,6 +2916,7 @@ function WorkspaceShellContent() {
     setCallType(isVideo ? 'video' : 'audio');
     setCallStatus('calling');
     startOutgoingRingtone();
+    handleUpdatePresence('BUSY');
 
     // Unlock/pre-warm mobile audio pipeline on user touch gesture
     if (remoteAudioRef.current) {
@@ -4847,6 +4860,10 @@ function WorkspaceShellContent() {
       if (res.ok) {
         const convo: Conversation = await res.json();
         setActiveConversation(convo);
+        const otherUser = convo.userOne?.id === user.id ? convo.userTwo : convo.userOne;
+        if (otherUser) {
+          setActiveRecipient(otherUser);
+        }
 
         const msgRes = await fetch(`${API_URL}/conversations/${convo.id}/messages`, {
           headers: { Authorization: `Bearer ${token}` },
@@ -8259,20 +8276,30 @@ function WorkspaceShellContent() {
                             className="h-6 w-6 rounded-lg border border-slate-200 object-cover"
                           />
                           <span
-                            className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-white ${
+                            className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-white shadow-2xs ${
                               memberPresence === 'BUSY'
                                 ? 'bg-rose-500'
                                 : memberPresence === 'AWAY'
                                 ? 'bg-amber-400'
                                 : memberPresence === 'ONLINE'
                                 ? 'bg-emerald-500'
-                                : 'bg-slate-300'
+                                : 'bg-slate-400'
                             }`}
                           />
                         </div>
                         <span className={`truncate text-xs ${unreadCount > 0 && !isDmActive ? 'font-bold text-slate-900' : 'font-medium'}`}>
                           {m.user.name} {isMe && <span className="text-[10px] text-slate-400 font-normal">(you)</span>}
                         </span>
+                        {memberPresence === 'BUSY' && (
+                          <span className="text-[9px] font-bold text-rose-600 bg-rose-50 px-1 py-0.2 rounded border border-rose-200/80 shrink-0">
+                            In call
+                          </span>
+                        )}
+                        {memberPresence === 'AWAY' && (
+                          <span className="text-[9px] font-medium text-amber-700 bg-amber-50 px-1 py-0.2 rounded border border-amber-200/80 shrink-0">
+                            Away
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
                         {unreadCount > 0 && !isDmActive && (
@@ -8381,51 +8408,54 @@ function WorkspaceShellContent() {
                 </span>
               </div>
             </div>
-          ) : activeRecipient ? (
-            <div className="flex items-center gap-3 min-w-0 shrink">
-              <div className="relative shrink-0">
-                <img
-                  src={activeRecipient.avatarUrl || 'https://api.dicebear.com/7.x/initials/svg?seed=User'}
-                  alt={activeRecipient.name}
-                  className="h-9 w-9 rounded-xl border border-slate-200 object-cover shadow-2xs"
-                />
-                <span
-                  className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-white ${
-                    activeRecipient.presence === 'BUSY'
-                      ? 'bg-rose-500'
-                      : activeRecipient.presence === 'AWAY'
-                      ? 'bg-amber-400'
-                      : activeRecipient.presence === 'ONLINE'
-                      ? 'bg-emerald-500'
-                      : 'bg-slate-300'
-                  }`}
-                />
-              </div>
-              <div className="flex flex-col min-w-0 justify-center">
-                <div className="flex items-center gap-2">
-                  <span className="font-black text-slate-900 text-base tracking-tight leading-tight shrink-0">
-                    {activeRecipient.name}
-                  </span>
+          ) : activeRecipient ? (() => {
+            const recipientMember = members.find((m) => m.user.id === activeRecipient.id);
+            const rPresence: PresenceStatus = recipientMember?.user?.presence || activeRecipient.presence || 'OFFLINE';
+            return (
+              <div className="flex items-center gap-3 min-w-0 shrink">
+                <div className="relative shrink-0">
+                  <img
+                    src={activeRecipient.avatarUrl || 'https://api.dicebear.com/7.x/initials/svg?seed=User'}
+                    alt={activeRecipient.name}
+                    className="h-9 w-9 rounded-xl border border-slate-200 object-cover shadow-2xs"
+                  />
                   <span
-                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider shrink-0 ${
-                      activeRecipient.presence === 'BUSY'
-                        ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                        : activeRecipient.presence === 'AWAY'
-                        ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                        : activeRecipient.presence === 'ONLINE'
-                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                        : 'bg-slate-100 text-slate-600 border border-slate-200'
+                    className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-white shadow-xs ${
+                      rPresence === 'BUSY'
+                        ? 'bg-rose-500'
+                        : rPresence === 'AWAY'
+                        ? 'bg-amber-400'
+                        : rPresence === 'ONLINE'
+                        ? 'bg-emerald-500'
+                        : 'bg-slate-400'
                     }`}
-                  >
-                    {activeRecipient.presence === 'BUSY'
-                      ? 'In a call'
-                      : activeRecipient.presence === 'AWAY'
-                      ? 'Away'
-                      : activeRecipient.presence === 'ONLINE'
-                      ? 'Active now'
-                      : 'Offline'}
-                  </span>
+                  />
                 </div>
+                <div className="flex flex-col min-w-0 justify-center">
+                  <div className="flex items-center gap-2">
+                    <span className="font-black text-slate-900 text-base tracking-tight leading-tight shrink-0">
+                      {activeRecipient.name}
+                    </span>
+                    <span
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider shrink-0 ${
+                        rPresence === 'BUSY'
+                          ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                          : rPresence === 'AWAY'
+                          ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                          : rPresence === 'ONLINE'
+                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : 'bg-slate-100 text-slate-600 border border-slate-200'
+                      }`}
+                    >
+                      {rPresence === 'BUSY'
+                        ? 'In a call'
+                        : rPresence === 'AWAY'
+                        ? 'Away'
+                        : rPresence === 'ONLINE'
+                        ? 'Active now'
+                        : 'Offline'}
+                    </span>
+                  </div>
                 <span
                   className="text-xs text-slate-400 truncate max-w-xs md:max-w-md font-mono leading-tight mt-0.5"
                   title={activeRecipient.email}
@@ -8434,7 +8464,7 @@ function WorkspaceShellContent() {
                 </span>
               </div>
             </div>
-          ) : isMailViewActive ? (
+          ); })() : isMailViewActive ? (
             <div className="flex items-center gap-3 min-w-0 shrink">
               <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white shrink-0 shadow-sm">
                 <Mail className="h-4 w-4" />
@@ -8843,24 +8873,30 @@ function WorkspaceShellContent() {
                 <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 sm:py-6 space-y-3">
                   {/* Direct Message Start Hero Card */}
                   <div className="p-4 sm:p-6 rounded-3xl bg-gradient-to-br from-indigo-50/70 via-purple-50/40 to-slate-50 border border-slate-200/80 mb-6 shadow-xs">
-                    <div className="relative inline-block mb-3">
-                      <img
-                        src={activeRecipient.avatarUrl || 'https://api.dicebear.com/7.x/initials/svg?seed=User'}
-                        alt={activeRecipient.name}
-                        className="h-14 w-14 rounded-2xl border border-slate-200 object-cover shadow-md"
-                      />
-                      <span
-                        className={`absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full ring-2 ring-white ${
-                          activeRecipient.presence === 'BUSY'
-                            ? 'bg-rose-500'
-                            : activeRecipient.presence === 'AWAY'
-                            ? 'bg-amber-400'
-                            : activeRecipient.presence === 'ONLINE'
-                            ? 'bg-emerald-500'
-                            : 'bg-slate-300'
-                        }`}
-                      />
-                    </div>
+                    {(() => {
+                      const recipientMember = members.find((m) => m.user.id === activeRecipient.id);
+                      const rPresence: PresenceStatus = recipientMember?.user?.presence || activeRecipient.presence || 'OFFLINE';
+                      return (
+                        <div className="relative inline-block mb-3">
+                          <img
+                            src={activeRecipient.avatarUrl || 'https://api.dicebear.com/7.x/initials/svg?seed=User'}
+                            alt={activeRecipient.name}
+                            className="h-14 w-14 rounded-2xl border border-slate-200 object-cover shadow-md"
+                          />
+                          <span
+                            className={`absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full ring-2 ring-white shadow-xs ${
+                              rPresence === 'BUSY'
+                                ? 'bg-rose-500'
+                                : rPresence === 'AWAY'
+                                ? 'bg-amber-400'
+                                : rPresence === 'ONLINE'
+                                ? 'bg-emerald-500'
+                                : 'bg-slate-400'
+                            }`}
+                          />
+                        </div>
+                      );
+                    })()}
                     <h2 className="text-2xl font-black text-slate-900 tracking-tight">
                       {activeRecipient.name}
                     </h2>
@@ -10348,7 +10384,7 @@ function WorkspaceShellContent() {
                                         ? 'bg-amber-400'
                                         : (isMe ? userPresence : m.user.presence) === 'ONLINE'
                                         ? 'bg-emerald-500'
-                                        : 'bg-slate-300'
+                                        : 'bg-slate-400'
                                     }`}
                                   />
                                 </div>
@@ -10454,7 +10490,7 @@ function WorkspaceShellContent() {
                                       ? 'bg-amber-400'
                                       : (isMe ? userPresence : m.user.presence) === 'ONLINE'
                                       ? 'bg-emerald-500'
-                                      : 'bg-slate-300'
+                                      : 'bg-slate-400'
                                   }`}
                                 />
                               </div>
@@ -11965,7 +12001,7 @@ function WorkspaceShellContent() {
                                         ? 'bg-amber-400'
                                         : p.presence === 'ONLINE'
                                         ? 'bg-emerald-500'
-                                        : 'bg-slate-300'
+                                        : 'bg-slate-400'
                                     }`}
                                   />
                                 </div>
