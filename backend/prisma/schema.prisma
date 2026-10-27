@@ -81,6 +81,7 @@ model Workspace {
   callRecordings CallRecording[]
   meetings      Meeting[]
   emailAccounts EmailAccount[]
+  mailTags      MailTag[]
 
   @@map("workspaces")
 }
@@ -412,6 +413,7 @@ model EmailMessage {
   sentByName        String?
   hasAttachments    Boolean      @default(false)
   attachmentsJson   Json?
+  tags              String[]     @default([])
   receivedAt        DateTime     @default(now())
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @updatedAt
@@ -421,5 +423,23 @@ model EmailMessage {
   @@index([accountId, isRead])
   @@index([accountId, isHandled])
   @@map("email_messages")
+}
+
+model MailTag {
+  id          String    @id @default(uuid())
+  workspaceId String
+  name        String
+  color       String    @default("#6366f1")
+  bg          String    @default("bg-indigo-50")
+  text        String    @default("text-indigo-700")
+  border      String    @default("border-indigo-200")
+  createdById String?
+  createdAt   DateTime  @default(now())
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+  @@map("mail_tags")
 }
 

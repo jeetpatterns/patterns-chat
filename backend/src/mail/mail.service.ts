@@ -1189,6 +1189,7 @@ export class MailService implements OnModuleInit {
       workspaceId?: string;
       folder?: string;
       status?: 'all' | 'unhandled' | 'done';
+      tag?: string;
       search?: string;
       page?: number;
       limit?: number;
@@ -1250,6 +1251,11 @@ export class MailService implements OnModuleInit {
       where.isHandled = true;
     }
 
+    // Front-style Tag filter
+    if (query.tag && query.tag !== 'all') {
+      where.tags = { has: query.tag };
+    }
+
     if (query.search?.trim()) {
       const q = query.search.trim();
       where.OR = [
@@ -1288,6 +1294,7 @@ export class MailService implements OnModuleInit {
           sentByName: true,
           hasAttachments: true,
           attachmentsJson: true,
+          tags: true,
           receivedAt: true,
           createdAt: true,
         },
@@ -1302,6 +1309,7 @@ export class MailService implements OnModuleInit {
         seenExternal.add(key);
         uniqueMessages.push({
           ...m,
+          tags: Array.isArray(m.tags) ? m.tags : [],
           attachments: (m.attachmentsJson as any[]) || [],
         });
       }
@@ -1538,6 +1546,158 @@ export class MailService implements OnModuleInit {
     }
 
     return { success: true, folder: updated.folder, message: updated };
+  }
+
+  // Update tags on email message with real-time sync across devices and channels
+  async updateTags(userId: string, messageId: string, tags: string[]) {
+    const message = await this.prisma.emailMessage.findUnique({
+      where: { id: messageId },
+      include: { account: true },
+    });
+
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+
+    const { account } = await this.validateAccountAccess(userId, message.accountId);
+
+    // Sanitize tags: trim, remove duplicates & empties, max 30 chars per tag, max 10 tags
+    const cleanTags = Array.from(
+      new Set(
+        (Array.isArray(tags) ? tags : [])
+          .map((t) => (typeof t === 'string' ? t.trim() : ''))
+          .filter((t) => t.length > 0 && t.length <= 30),
+      ),
+    ).slice(0, 10);
+
+    const updated = await this.prisma.emailMessage.update({
+      where: { id: messageId },
+      data: { tags: cleanTags },
+    });
+
+    // Broadcast real-time tag update via Socket.IO
+    if (this.messagesGateway?.server) {
+      const payload = {
+        messageId,
+        accountId: account.id,
+        tags: cleanTags,
+        updatedById: userId,
+      };
+
+      if (account.channelId) {
+        this.messagesGateway.server.to(`channel:${account.channelId}`).emit('email_tags_updated', payload);
+      }
+      if (account.workspaceId) {
+        this.messagesGateway.server.to(`workspace:${account.workspaceId}`).emit('email_tags_updated', payload);
+      }
+      this.messagesGateway.server.to(`user:${account.userId}`).emit('email_tags_updated', payload);
+      this.messagesGateway.server.to(`user:${userId}`).emit('email_tags_updated', payload);
+    }
+
+    return updated;
+  }
+
+  // Get all custom tags for a workspace
+  async getWorkspaceTags(userId: string, workspaceId: string) {
+    if (!workspaceId) return [];
+    const wsMember = await this.prisma.workspaceMember.findUnique({
+      where: { workspaceId_userId: { workspaceId, userId } },
+    });
+    if (!wsMember) {
+      throw new ForbiddenException('Access to workspace denied');
+    }
+
+    return this.prisma.mailTag.findMany({
+      where: { workspaceId },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  // Create a new custom tag in workspace
+  async createCustomTag(
+    userId: string,
+    data: {
+      workspaceId: string;
+      name: string;
+      color?: string;
+      bg?: string;
+      text?: string;
+      border?: string;
+    },
+  ) {
+    if (!data.workspaceId) {
+      throw new BadRequestException('workspaceId is required');
+    }
+    const wsMember = await this.prisma.workspaceMember.findUnique({
+      where: { workspaceId_userId: { workspaceId: data.workspaceId, userId } },
+    });
+    if (!wsMember) {
+      throw new ForbiddenException('Access to workspace denied');
+    }
+
+    const cleanName = data.name?.trim();
+    if (!cleanName || cleanName.length > 30) {
+      throw new BadRequestException('Tag name must be between 1 and 30 characters');
+    }
+
+    // Check if tag already exists in workspace (case-insensitive)
+    const existing = await this.prisma.mailTag.findFirst({
+      where: {
+        workspaceId: data.workspaceId,
+        name: { equals: cleanName, mode: 'insensitive' },
+      },
+    });
+    if (existing) {
+      return existing;
+    }
+
+    const tag = await this.prisma.mailTag.create({
+      data: {
+        workspaceId: data.workspaceId,
+        name: cleanName,
+        color: data.color || '#6366f1',
+        bg: data.bg || 'bg-indigo-50',
+        text: data.text || 'text-indigo-700',
+        border: data.border || 'border-indigo-200',
+        createdById: userId,
+      },
+    });
+
+    if (this.messagesGateway?.server) {
+      this.messagesGateway.server.to(`workspace:${data.workspaceId}`).emit('mail_tag_created', tag);
+    }
+
+    return tag;
+  }
+
+  // Delete a custom tag
+  async deleteCustomTag(userId: string, tagId: string) {
+    const tag = await this.prisma.mailTag.findUnique({
+      where: { id: tagId },
+    });
+    if (!tag) {
+      throw new NotFoundException('Tag not found');
+    }
+
+    const wsMember = await this.prisma.workspaceMember.findUnique({
+      where: { workspaceId_userId: { workspaceId: tag.workspaceId, userId } },
+    });
+    if (!wsMember) {
+      throw new ForbiddenException('Access to workspace denied');
+    }
+
+    await this.prisma.mailTag.delete({
+      where: { id: tagId },
+    });
+
+    if (this.messagesGateway?.server) {
+      this.messagesGateway.server.to(`workspace:${tag.workspaceId}`).emit('mail_tag_deleted', {
+        tagId,
+        name: tag.name,
+      });
+    }
+
+    return { success: true, id: tagId };
   }
 
   // Send new email (or reply on behalf of group mailbox) with full attachment support

@@ -126,6 +126,7 @@ export class MailController {
     @Query('workspaceId') workspaceId?: string,
     @Query('folder') folder?: string,
     @Query('status') status?: 'all' | 'unhandled' | 'done',
+    @Query('tag') tag?: string,
     @Query('search') search?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -135,6 +136,7 @@ export class MailController {
       workspaceId,
       folder,
       status,
+      tag,
       search,
       page: page ? parseInt(page, 10) : 1,
       limit: limit ? parseInt(limit, 10) : 20,
@@ -183,6 +185,47 @@ export class MailController {
     @Body() body: { isHandled?: boolean },
   ) {
     return this.mailService.toggleHandled(user.id, id, body?.isHandled);
+  }
+
+  @Patch('messages/:id/tags')
+  async updateTags(
+    @CurrentUser() user: { id: string },
+    @Param('id') id: string,
+    @Body() body: { tags: string[] },
+  ) {
+    return this.mailService.updateTags(user.id, id, body?.tags || []);
+  }
+
+  @Get('tags')
+  async getWorkspaceTags(
+    @CurrentUser() user: { id: string },
+    @Query('workspaceId') workspaceId: string,
+  ) {
+    return this.mailService.getWorkspaceTags(user.id, workspaceId);
+  }
+
+  @Post('tags')
+  async createCustomTag(
+    @CurrentUser() user: { id: string },
+    @Body()
+    body: {
+      workspaceId: string;
+      name: string;
+      color?: string;
+      bg?: string;
+      text?: string;
+      border?: string;
+    },
+  ) {
+    return this.mailService.createCustomTag(user.id, body);
+  }
+
+  @Delete('tags/:id')
+  async deleteCustomTag(
+    @CurrentUser() user: { id: string },
+    @Param('id') id: string,
+  ) {
+    return this.mailService.deleteCustomTag(user.id, id);
   }
 
   @Patch('messages/:id/star')

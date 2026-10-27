@@ -106,6 +106,7 @@ import {
   Contact,
   BarChart2,
   Layers,
+  Tag,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 import { Workspace, WorkspaceMember, WorkspaceRole, Meeting } from '@/types/auth';
@@ -197,8 +198,56 @@ export interface EmailMessageItem {
   hasAttachments: boolean;
   attachments?: Array<{ fileName: string; fileUrl: string; fileSize: number; contentType: string }>;
   attachmentsJson?: Array<{ fileName: string; fileUrl: string; fileSize: number; contentType: string }>;
+  tags?: string[];
   receivedAt: string;
   createdAt: string;
+}
+
+export interface FrontTag {
+  id?: string;
+  name: string;
+  color: string;
+  bg: string;
+  text: string;
+  border: string;
+  isCustom?: boolean;
+}
+
+export const TAG_COLOR_PALETTES = [
+  { color: '#f43f5e', label: 'Rose', bg: 'bg-rose-50', text: 'text-rose-700', border: 'border-rose-200' },
+  { color: '#0ea5e9', label: 'Sky', bg: 'bg-sky-50', text: 'text-sky-700', border: 'border-sky-200' },
+  { color: '#f59e0b', label: 'Amber', bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
+  { color: '#10b981', label: 'Emerald', bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200' },
+  { color: '#8b5cf6', label: 'Purple', bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-200' },
+  { color: '#6366f1', label: 'Indigo', bg: 'bg-indigo-50', text: 'text-indigo-700', border: 'border-indigo-200' },
+  { color: '#ec4899', label: 'Pink', bg: 'bg-pink-50', text: 'text-pink-700', border: 'border-pink-200' },
+  { color: '#14b8a6', label: 'Teal', bg: 'bg-teal-50', text: 'text-teal-700', border: 'border-teal-200' },
+  { color: '#f97316', label: 'Orange', bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-200' },
+  { color: '#64748b', label: 'Slate', bg: 'bg-slate-100', text: 'text-slate-700', border: 'border-slate-300' },
+];
+
+export const PRESET_TAGS: FrontTag[] = [
+  { name: 'Urgent', color: '#f43f5e', bg: 'bg-rose-50', text: 'text-rose-700', border: 'border-rose-200' },
+  { name: 'Client', color: '#0ea5e9', bg: 'bg-sky-50', text: 'text-sky-700', border: 'border-sky-200' },
+  { name: 'Bug', color: '#f59e0b', bg: 'bg-amber-50', text: 'text-amber-700', border: 'border-amber-200' },
+  { name: 'Billing', color: '#10b981', bg: 'bg-emerald-50', text: 'text-emerald-700', border: 'border-emerald-200' },
+  { name: 'VIP', color: '#8b5cf6', bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-200' },
+  { name: 'Follow-up', color: '#6366f1', bg: 'bg-indigo-50', text: 'text-indigo-700', border: 'border-indigo-200' },
+];
+
+export function getTagStyle(tagName: string, customTags: FrontTag[] = []): FrontTag {
+  const custom = customTags.find((c) => c.name.toLowerCase() === tagName.toLowerCase());
+  if (custom) return custom;
+  const found = PRESET_TAGS.find((p) => p.name.toLowerCase() === tagName.toLowerCase());
+  if (found) return found;
+  const palette = TAG_COLOR_PALETTES;
+  let h = 0;
+  for (let i = 0; i < tagName.length; i++) {
+    h = (h << 5) - h + tagName.charCodeAt(i);
+    h |= 0;
+  }
+  const idx = Math.abs(h) % palette.length;
+  return { name: tagName, ...palette[idx] };
 }
 
 // Module 9: Enhanced Code Block with Language Badge & Copy-to-Clipboard
@@ -839,6 +888,19 @@ function WorkspaceShellContent() {
   const [isMailLoading, setIsMailLoading] = useState(false);
   const [mailSearchQuery, setMailSearchQuery] = useState('');
   const [mailStatusFilter, setMailStatusFilter] = useState<'unhandled' | 'done' | 'all'>('unhandled');
+  const [selectedTagFilter, setSelectedTagFilter] = useState<string>('all');
+  const [showMailTagPopover, setShowMailTagPopover] = useState(false);
+  const [tagSearchInput, setTagSearchInput] = useState('');
+  const mailTagPopoverRef = useRef<HTMLDivElement>(null);
+  const [customMailTags, setCustomMailTags] = useState<FrontTag[]>([]);
+  const [showCreateTagModal, setShowCreateTagModal] = useState(false);
+  const [newTagName, setNewTagName] = useState('');
+  const [newTagColor, setNewTagColor] = useState(TAG_COLOR_PALETTES[0].color);
+  const [isCreatingTag, setIsCreatingTag] = useState(false);
+  const [showMailHeaderTagPopover, setShowMailHeaderTagPopover] = useState(false);
+  const [mailHeaderTagSearch, setMailHeaderTagSearch] = useState('');
+  const mailHeaderTagPopoverRef = useRef<HTMLDivElement>(null);
+  const [rowTagPopoverMsgId, setRowTagPopoverMsgId] = useState<string | null>(null);
 
   useEffect(() => {
     if (tabParam === 'mail') {
@@ -1054,14 +1116,23 @@ function WorkspaceShellContent() {
       if (mailDatePopoverRef.current && !mailDatePopoverRef.current.contains(e.target as Node)) {
         setShowMailDatePopover(false);
       }
+      if (mailTagPopoverRef.current && !mailTagPopoverRef.current.contains(e.target as Node)) {
+        setShowMailTagPopover(false);
+      }
+      if (mailHeaderTagPopoverRef.current && !mailHeaderTagPopoverRef.current.contains(e.target as Node)) {
+        setShowMailHeaderTagPopover(false);
+      }
+      if (rowTagPopoverMsgId && !(e.target as HTMLElement).closest('[data-row-tag-popover]')) {
+        setRowTagPopoverMsgId(null);
+      }
     }
-    if (showMailDatePopover) {
+    if (showMailDatePopover || showMailTagPopover || showMailHeaderTagPopover || rowTagPopoverMsgId) {
       document.addEventListener('mousedown', handleClickOutside);
     }
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showMailDatePopover]);
+  }, [showMailDatePopover, showMailTagPopover, showMailHeaderTagPopover, rowTagPopoverMsgId]);
 
   const handleUploadMailAttachment = async (
     files: FileList | null,
@@ -1131,7 +1202,8 @@ function WorkspaceShellContent() {
     }
   }, [activeAppTab, totalUnreadCount, totalUnreadEmails, currentWs?.name]);
 
-  const filteredMailMessages = useMemo(() => {
+  // Messages matching the current mailbox view (folder, status filter, read/unread mode)
+  const visibleMessagesInView = useMemo(() => {
     const seen = new Set<string>();
     const deduped = mailMessages.filter((msg) => {
       if (!msg) return false;
@@ -1149,38 +1221,55 @@ function WorkspaceShellContent() {
       }
       if (emailFilterMode === 'unread') return !msg.isRead;
       if (emailFilterMode === 'starred') return msg.isStarred;
+      return true;
+    });
+  }, [mailMessages, mailFolder, mailStatusFilter, emailFilterMode]);
 
+  // Tag counts calculated strictly for visible messages in the current mailbox view
+  const mailTagCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const msg of visibleMessagesInView) {
+      if (Array.isArray(msg.tags)) {
+        for (const t of msg.tags) {
+          const key = t.trim();
+          if (key) {
+            counts[key] = (counts[key] || 0) + 1;
+          }
+        }
+      }
+    }
+    return counts;
+  }, [visibleMessagesInView]);
+
+  // Messages with Date & Tag filters applied
+  const filteredMailMessages = useMemo(() => {
+    return visibleMessagesInView.filter((msg) => {
       // Date Filtering
       if (mailDateFilter !== 'all') {
         const msgDate = new Date(msg.receivedAt);
         if (isNaN(msgDate.getTime())) return false;
         const now = new Date();
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+        const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
 
         if (mailDateFilter === 'today') {
-          const isToday =
-            msgDate.getDate() === now.getDate() &&
-            msgDate.getMonth() === now.getMonth() &&
-            msgDate.getFullYear() === now.getFullYear();
-          if (!isToday) return false;
+          if (msgDate < startOfToday || msgDate > endOfToday) return false;
         } else if (mailDateFilter === 'yesterday') {
-          const yesterday = new Date(now);
-          yesterday.setDate(now.getDate() - 1);
-          const isYesterday =
-            msgDate.getDate() === yesterday.getDate() &&
-            msgDate.getMonth() === yesterday.getMonth() &&
-            msgDate.getFullYear() === yesterday.getFullYear();
-          if (!isYesterday) return false;
+          const startOfYesterday = new Date(startOfToday);
+          startOfYesterday.setDate(startOfToday.getDate() - 1);
+          const endOfYesterday = new Date(startOfToday.getTime() - 1);
+          if (msgDate < startOfYesterday || msgDate > endOfYesterday) return false;
         } else if (mailDateFilter === 'last7days') {
-          const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-          if (msgDate < sevenDaysAgo) return false;
+          const startOf7Days = new Date(startOfToday);
+          startOf7Days.setDate(startOfToday.getDate() - 6);
+          if (msgDate < startOf7Days || msgDate > endOfToday) return false;
         } else if (mailDateFilter === 'last30days') {
-          const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-          if (msgDate < thirtyDaysAgo) return false;
+          const startOf30Days = new Date(startOfToday);
+          startOf30Days.setDate(startOfToday.getDate() - 29);
+          if (msgDate < startOf30Days || msgDate > endOfToday) return false;
         } else if (mailDateFilter === 'thisMonth') {
-          const isThisMonth =
-            msgDate.getMonth() === now.getMonth() &&
-            msgDate.getFullYear() === now.getFullYear();
-          if (!isThisMonth) return false;
+          const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+          if (msgDate < startOfMonth || msgDate > endOfToday) return false;
         } else if (mailDateFilter === 'custom') {
           if (mailDateStart) {
             const start = new Date(`${mailDateStart}T00:00:00`);
@@ -1193,9 +1282,47 @@ function WorkspaceShellContent() {
         }
       }
 
+      // Front-style Tag Filter
+      if (selectedTagFilter !== 'all') {
+        const hasTag = (msg.tags || []).some(
+          (t) => t.trim().toLowerCase() === selectedTagFilter.trim().toLowerCase(),
+        );
+        if (!hasTag) return false;
+      }
+
       return true;
     });
-  }, [mailMessages, mailFolder, mailStatusFilter, emailFilterMode, mailDateFilter, mailDateStart, mailDateEnd]);
+  }, [visibleMessagesInView, mailDateFilter, mailDateStart, mailDateEnd, selectedTagFilter]);
+
+  const allAvailableTags = useMemo(() => {
+    const list: FrontTag[] = [...PRESET_TAGS];
+    for (const ct of customMailTags) {
+      if (!list.some((p) => p.name.toLowerCase() === ct.name.toLowerCase())) {
+        list.push({ ...ct, isCustom: true });
+      }
+    }
+    for (const t of Object.keys(mailTagCounts)) {
+      if (!list.some((p) => p.name.toLowerCase() === t.toLowerCase())) {
+        list.push(getTagStyle(t, customMailTags));
+      }
+    }
+    return list;
+  }, [customMailTags, mailTagCounts]);
+
+  async function loadWorkspaceTags() {
+    if (!token || !workspaceId) return;
+    try {
+      const res = await fetch(`${API_URL}/mail/tags?workspaceId=${workspaceId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCustomMailTags(data.map((t: any) => ({ ...t, isCustom: true })));
+      }
+    } catch (e) {
+      console.error('Failed to load workspace tags:', e);
+    }
+  }
 
   async function loadMailAccounts() {
     if (!token) return;
@@ -1476,6 +1603,119 @@ function WorkspaceShellContent() {
       }
     } catch (err) {
       console.error('Failed to move message folder:', err);
+    }
+  }
+
+  async function handleToggleEmailTag(messageId: string, tagName: string) {
+    if (!token || !tagName.trim()) return;
+    const cleanTag = tagName.trim();
+    const targetMsg = mailMessages.find((m) => m.id === messageId) || selectedEmail;
+    if (!targetMsg) return;
+
+    const currentTags = Array.isArray(targetMsg.tags) ? targetMsg.tags : [];
+    const exists = currentTags.some((t) => t.toLowerCase() === cleanTag.toLowerCase());
+    const nextTags = exists
+      ? currentTags.filter((t) => t.toLowerCase() !== cleanTag.toLowerCase())
+      : [...currentTags, cleanTag];
+
+    // Optimistically update local message list and active email
+    setMailMessages((prev) =>
+      prev.map((m) => (m.id === messageId ? { ...m, tags: nextTags } : m)),
+    );
+    if (selectedEmail?.id === messageId) {
+      setSelectedEmail((prev) => (prev ? { ...prev, tags: nextTags } : null));
+    }
+
+    try {
+      await fetch(`${API_URL}/mail/messages/${messageId}/tags`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ tags: nextTags }),
+      });
+    } catch (err) {
+      console.error('Failed to update email tags:', err);
+    }
+  }
+
+  async function handleRemoveEmailTag(messageId: string, tagName: string, e?: React.MouseEvent) {
+    if (e) e.stopPropagation();
+    await handleToggleEmailTag(messageId, tagName);
+  }
+
+  async function handleCreateNewTag(name: string, colorHex?: string, targetMessageIdToApply?: string) {
+    if (!token || !workspaceId || !name.trim()) return;
+    const cleanName = name.trim();
+    const colorObj = TAG_COLOR_PALETTES.find((p) => p.color === colorHex) || TAG_COLOR_PALETTES[0];
+
+    try {
+      setIsCreatingTag(true);
+      const res = await fetch(`${API_URL}/mail/tags`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          workspaceId,
+          name: cleanName,
+          color: colorObj.color,
+          bg: colorObj.bg,
+          text: colorObj.text,
+          border: colorObj.border,
+        }),
+      });
+
+      if (res.ok) {
+        const created: FrontTag = await res.json();
+        setCustomMailTags((prev) => {
+          if (prev.some((p) => p.name.toLowerCase() === created.name.toLowerCase())) {
+            return prev;
+          }
+          return [...prev, { ...created, isCustom: true }];
+        });
+
+        if (targetMessageIdToApply) {
+          await handleToggleEmailTag(targetMessageIdToApply, created.name);
+        }
+
+        setCallNotificationMsg(`Tag "${cleanName}" created!`);
+        setTimeout(() => setCallNotificationMsg(null), 3000);
+        setShowCreateTagModal(false);
+        setNewTagName('');
+        return created;
+      } else {
+        const err = await res.json();
+        setCallNotificationMsg(err.message || 'Failed to create tag');
+        setTimeout(() => setCallNotificationMsg(null), 3000);
+      }
+    } catch (e) {
+      console.error('Failed to create tag:', e);
+    } finally {
+      setIsCreatingTag(false);
+    }
+  }
+
+  async function handleDeleteCustomTag(tagId: string, tagName: string, e?: React.MouseEvent) {
+    if (e) e.stopPropagation();
+    if (!token) return;
+
+    setCustomMailTags((prev) => prev.filter((t) => t.id !== tagId && t.name.toLowerCase() !== tagName.toLowerCase()));
+    if (selectedTagFilter.toLowerCase() === tagName.toLowerCase()) {
+      setSelectedTagFilter('all');
+    }
+
+    try {
+      await fetch(`${API_URL}/mail/tags/${tagId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      setCallNotificationMsg(`Tag "${tagName}" deleted`);
+      setTimeout(() => setCallNotificationMsg(null), 2500);
+    } catch (e) {
+      console.error('Failed to delete tag:', e);
     }
   }
 
@@ -2207,14 +2447,104 @@ function WorkspaceShellContent() {
   useEffect(() => {
     if (activeAppTab === 'mail' && token) {
       loadMailAccounts();
+      loadWorkspaceTags();
     }
-  }, [activeAppTab, token]);
+  }, [activeAppTab, token, workspaceId]);
 
   useEffect(() => {
     if (activeAppTab === 'mail' && token && selectedMailAccountId) {
       loadMailMessages(selectedMailAccountId, mailFolder, mailSearchQuery);
     }
   }, [activeAppTab, selectedMailAccountId, mailFolder]);
+
+  // Realtime Socket.IO Listeners for Collaborative Mail & Front Tags
+  useEffect(() => {
+    const socket = getSocket();
+
+    const handleTagsUpdated = (data: { messageId: string; tags: string[] }) => {
+      if (!data?.messageId) return;
+      setMailMessages((prev) =>
+        prev.map((m) => (m.id === data.messageId ? { ...m, tags: data.tags } : m)),
+      );
+      if (selectedEmailRef.current?.id === data.messageId) {
+        setSelectedEmail((prev) => (prev ? { ...prev, tags: data.tags } : null));
+      }
+    };
+
+    const handleHandledUpdated = (data: {
+      messageId: string;
+      isHandled: boolean;
+      handledBy?: any;
+      handledAt?: string;
+    }) => {
+      if (!data?.messageId) return;
+      setMailMessages((prev) =>
+        prev.map((m) =>
+          m.id === data.messageId
+            ? {
+                ...m,
+                isHandled: data.isHandled,
+                handledByName: data.handledBy?.name || null,
+                handledAt: data.handledAt || null,
+              }
+            : m,
+        ),
+      );
+      if (selectedEmailRef.current?.id === data.messageId) {
+        setSelectedEmail((prev) =>
+          prev
+            ? {
+                ...prev,
+                isHandled: data.isHandled,
+                handledByName: data.handledBy?.name || null,
+                handledAt: data.handledAt || null,
+              }
+            : null,
+        );
+      }
+    };
+
+    const handleReadUpdated = (data: { messageId: string; isRead: boolean }) => {
+      if (!data?.messageId) return;
+      setMailMessages((prev) =>
+        prev.map((m) => (m.id === data.messageId ? { ...m, isRead: data.isRead } : m)),
+      );
+      if (selectedEmailRef.current?.id === data.messageId) {
+        setSelectedEmail((prev) => (prev ? { ...prev, isRead: data.isRead } : null));
+      }
+    };
+
+    const handleTagCreated = (tag: FrontTag) => {
+      if (!tag?.name) return;
+      setCustomMailTags((prev) => {
+        if (prev.some((t) => t.name.toLowerCase() === tag.name.toLowerCase())) {
+          return prev;
+        }
+        return [...prev, { ...tag, isCustom: true }];
+      });
+    };
+
+    const handleTagDeleted = (data: { tagId: string; name: string }) => {
+      if (!data) return;
+      setCustomMailTags((prev) =>
+        prev.filter((t) => t.id !== data.tagId && t.name.toLowerCase() !== data.name.toLowerCase()),
+      );
+    };
+
+    socket.on('email_tags_updated', handleTagsUpdated);
+    socket.on('email_handled_updated', handleHandledUpdated);
+    socket.on('email_read_updated', handleReadUpdated);
+    socket.on('mail_tag_created', handleTagCreated);
+    socket.on('mail_tag_deleted', handleTagDeleted);
+
+    return () => {
+      socket.off('email_tags_updated', handleTagsUpdated);
+      socket.off('email_handled_updated', handleHandledUpdated);
+      socket.off('email_read_updated', handleReadUpdated);
+      socket.off('mail_tag_created', handleTagCreated);
+      socket.off('mail_tag_deleted', handleTagDeleted);
+    };
+  }, []);
 
   // 1. Initial Load: Workspace, Channels, and Members
   useEffect(() => {
@@ -7025,6 +7355,12 @@ function WorkspaceShellContent() {
                               if (selectedMailAccountId !== acc.id) {
                                 setSelectedMailAccountId(acc.id);
                                 setSelectedEmail(null);
+                                setSelectedTagFilter('all');
+                                setMailDateFilter('all');
+                                setMailDateStart('');
+                                setMailDateEnd('');
+                                setShowMailHeaderTagPopover(false);
+                                setShowMailDatePopover(false);
                                 loadMailMessages(acc.id, mailFolder, mailSearchQuery);
                                 handleSyncMailAccount(acc.id, true);
                               }
@@ -7033,6 +7369,12 @@ function WorkspaceShellContent() {
                               if (e.key === 'Enter' || e.key === ' ') {
                                 setSelectedMailAccountId(acc.id);
                                 setSelectedEmail(null);
+                                setSelectedTagFilter('all');
+                                setMailDateFilter('all');
+                                setMailDateStart('');
+                                setMailDateEnd('');
+                                setShowMailHeaderTagPopover(false);
+                                setShowMailDatePopover(false);
                                 loadMailMessages(acc.id, mailFolder, mailSearchQuery);
                                 handleSyncMailAccount(acc.id, true);
                               }
@@ -7179,6 +7521,12 @@ function WorkspaceShellContent() {
                               if (selectedMailAccountId !== acc.id) {
                                 setSelectedMailAccountId(acc.id);
                                 setSelectedEmail(null);
+                                setSelectedTagFilter('all');
+                                setMailDateFilter('all');
+                                setMailDateStart('');
+                                setMailDateEnd('');
+                                setShowMailHeaderTagPopover(false);
+                                setShowMailDatePopover(false);
                                 loadMailMessages(acc.id, mailFolder, mailSearchQuery);
                                 handleSyncMailAccount(acc.id, true);
                               }
@@ -7187,6 +7535,12 @@ function WorkspaceShellContent() {
                               if (e.key === 'Enter' || e.key === ' ') {
                                 setSelectedMailAccountId(acc.id);
                                 setSelectedEmail(null);
+                                setSelectedTagFilter('all');
+                                setMailDateFilter('all');
+                                setMailDateStart('');
+                                setMailDateEnd('');
+                                setShowMailHeaderTagPopover(false);
+                                setShowMailDatePopover(false);
                                 loadMailMessages(acc.id, mailFolder, mailSearchQuery);
                                 handleSyncMailAccount(acc.id, true);
                               }
@@ -7289,6 +7643,152 @@ function WorkspaceShellContent() {
                         <span>{selectedEmail.isHandled ? `Done by ${selectedEmail.handledByName || 'Team'}` : 'Mark as Done'}</span>
                       </button>
                     )}
+
+                    {/* Front-Style Tag Dropdown Popover */}
+                    <div className="relative" ref={mailTagPopoverRef}>
+                      <button
+                        type="button"
+                        onClick={() => setShowMailTagPopover(!showMailTagPopover)}
+                        className={`px-2.5 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 border transition-all shadow-2xs cursor-pointer ${
+                          showMailTagPopover || (selectedEmail.tags && selectedEmail.tags.length > 0)
+                            ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                            : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
+                        }`}
+                        title="Manage Front-style tags and labels"
+                      >
+                        <Tag className="w-3.5 h-3.5 text-indigo-600" />
+                        <span>Tags</span>
+                        {selectedEmail.tags && selectedEmail.tags.length > 0 && (
+                          <span className="h-4 px-1 rounded-full bg-indigo-600 text-white text-[9px] font-bold flex items-center justify-center">
+                            {selectedEmail.tags.length}
+                          </span>
+                        )}
+                      </button>
+
+                      {/* Tag Selector Popover Dropdown */}
+                      {showMailTagPopover && (
+                        <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-2xl border border-slate-200 shadow-2xl p-3 z-50 animate-in zoom-in-95 duration-150">
+                          <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                            <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                              <Tag className="w-3.5 h-3.5 text-indigo-600" />
+                              <span>Apply Tags</span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setShowMailTagPopover(false)}
+                              className="text-slate-400 hover:text-slate-600 p-0.5 rounded-md cursor-pointer"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+
+                          {/* Quick Search / Create New Tag */}
+                          <div className="mt-2.5">
+                            <form
+                              onSubmit={(e) => {
+                                e.preventDefault();
+                                if (tagSearchInput.trim()) {
+                                  handleToggleEmailTag(selectedEmail.id, tagSearchInput.trim());
+                                  setTagSearchInput('');
+                                }
+                              }}
+                              className="flex items-center gap-1.5"
+                            >
+                              <input
+                                type="text"
+                                value={tagSearchInput}
+                                onChange={(e) => setTagSearchInput(e.target.value)}
+                                placeholder="Add or search tag..."
+                                className="flex-1 text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium"
+                              />
+                              {tagSearchInput.trim() && (
+                                <button
+                                  type="submit"
+                                  className="px-2 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shrink-0 transition-colors cursor-pointer"
+                                >
+                                  Add
+                                </button>
+                              )}
+                            </form>
+                          </div>
+
+                          {/* Preset and Existing Tags List */}
+                          <div className="mt-2.5 max-h-52 overflow-y-auto space-y-1">
+                            {allAvailableTags
+                              .filter((t) =>
+                                !tagSearchInput.trim() ||
+                                t.name.toLowerCase().includes(tagSearchInput.trim().toLowerCase())
+                              )
+                              .map((tagItem) => {
+                                const tagName = tagItem.name;
+                                const style = tagItem;
+                                const isApplied = (selectedEmail.tags || []).some(
+                                  (t) => t.toLowerCase() === tagName.toLowerCase()
+                                );
+                                return (
+                                  <button
+                                    key={tagName}
+                                    type="button"
+                                    onClick={() => handleToggleEmailTag(selectedEmail.id, tagName)}
+                                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs transition-all cursor-pointer ${
+                                      isApplied
+                                        ? `${style.bg} ${style.text} font-bold border ${style.border}`
+                                        : 'hover:bg-slate-50 text-slate-700 font-medium'
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <span
+                                        className="h-2 w-2 rounded-full shrink-0"
+                                        style={{ backgroundColor: style.color }}
+                                      />
+                                      <span className="truncate">{tagName}</span>
+                                    </div>
+                                    {isApplied ? (
+                                      <Check className={`w-3.5 h-3.5 shrink-0 ${style.text}`} />
+                                    ) : (
+                                      <Plus className="w-3 h-3 text-slate-300 hover:text-slate-600 shrink-0" />
+                                    )}
+                                  </button>
+                                );
+                              })}
+
+                            {tagSearchInput.trim() &&
+                              !allAvailableTags.some(
+                                (t) => t.name.toLowerCase() === tagSearchInput.trim().toLowerCase(),
+                              ) && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setNewTagName(tagSearchInput.trim());
+                                    setNewTagColor(TAG_COLOR_PALETTES[0].color);
+                                    setShowCreateTagModal(true);
+                                  }}
+                                  className="w-full flex items-center gap-2 px-2.5 py-2 rounded-xl text-xs font-bold text-indigo-700 bg-indigo-50/80 hover:bg-indigo-100/80 border border-indigo-200 transition-colors cursor-pointer"
+                                >
+                                  <Plus className="w-3.5 h-3.5 text-indigo-600" />
+                                  <span>Create tag &quot;{tagSearchInput.trim()}&quot;</span>
+                                </button>
+                              )}
+                          </div>
+
+                          {/* Bottom Action: Create New Custom Tag */}
+                          <div className="pt-2 mt-2 border-t border-slate-100">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setNewTagName(tagSearchInput.trim());
+                                setNewTagColor(TAG_COLOR_PALETTES[0].color);
+                                setShowCreateTagModal(true);
+                              }}
+                              className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-xl text-xs font-bold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 border border-dashed border-indigo-200 transition-colors cursor-pointer"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>+ Create New Tag</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
 
                     <button
                       type="button"
@@ -7454,6 +7954,38 @@ function WorkspaceShellContent() {
                             title="Print email"
                           >
                             <Printer className="w-4 h-4" />
+                          </button>
+                        </div>
+
+                        {/* Front-Style Applied Email Tags */}
+                        <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
+                          {Array.isArray(selectedEmail.tags) && selectedEmail.tags.map((tagName) => {
+                            const style = getTagStyle(tagName);
+                            return (
+                              <span
+                                key={tagName}
+                                className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg text-xs font-bold border ${style.bg} ${style.text} ${style.border} shadow-2xs`}
+                              >
+                                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: style.color }} />
+                                <span>{tagName}</span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleRemoveEmailTag(selectedEmail.id, tagName, e)}
+                                  className="hover:opacity-75 p-0.5 rounded transition-opacity cursor-pointer"
+                                  title={`Remove ${tagName} tag`}
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </span>
+                            );
+                          })}
+                          <button
+                            type="button"
+                            onClick={() => setShowMailTagPopover(true)}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-semibold text-slate-500 hover:text-indigo-600 bg-slate-100 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 transition-all cursor-pointer"
+                          >
+                            <Plus className="w-3 h-3" />
+                            <span>Add tag</span>
                           </button>
                         </div>
 
@@ -7841,9 +8373,10 @@ function WorkspaceShellContent() {
             ) : (
               /* ── 2. GMAIL FULL-WIDTH ALL MAILS LIST VIEW (Only All Mail) ── */
               <div className="flex-1 flex flex-col bg-white min-w-0 overflow-hidden relative">
-                {/* Full-width Gmail Header Toolbar */}
-                <header className="min-h-16 py-2 px-3 sm:px-6 border-b border-slate-100 bg-white flex flex-wrap items-center justify-between gap-2.5 shrink-0 z-10">
-                  {/* Left: Folder Title & Badge */}
+                {/* ── TWO-ROW DEDICATED MAIL HEADER & TOOLBAR ── */}
+                {/* ── ROW 1: Mail View Main Header (Folder info & Quick Actions) ── */}
+                <header className="h-15 px-4 sm:px-6 border-b border-slate-100 bg-white flex items-center justify-between gap-3 shrink-0 z-20">
+                  {/* Left: Folder Title & Connected Mailbox Info */}
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="h-9 w-9 rounded-xl bg-indigo-50 border border-indigo-200/80 flex items-center justify-center text-indigo-600 shadow-2xs shrink-0">
                       {mailFolder === 'SENT' ? (
@@ -7862,51 +8395,20 @@ function WorkspaceShellContent() {
                     </div>
                     <div className="flex flex-col min-w-0 justify-center">
                       <div className="flex items-center gap-2">
-                        <span className="font-black text-slate-900 text-sm tracking-tight capitalize leading-tight">
+                        <span className="font-black text-slate-900 text-base tracking-tight capitalize leading-tight">
                           {mailFolder === 'SENT' ? 'Sent' : mailFolder === 'INBOX' ? 'Inbox' : mailFolder === 'SPAM' ? 'Spam' : mailFolder.toLowerCase()}
                         </span>
-                        {mailDateFilter !== 'all' ? (
-                          <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-2xs">
-                            <span>
-                              {filteredMailMessages.length} {mailFolder === 'SENT' ? 'sent' : 'emails'} (
-                              {mailDateFilter === 'today'
-                                ? 'Today'
-                                : mailDateFilter === 'yesterday'
-                                ? 'Yesterday'
-                                : mailDateFilter === 'last7days'
-                                ? 'Last 7 Days'
-                                : mailDateFilter === 'last30days'
-                                ? 'Last 30 Days'
-                                : mailDateFilter === 'thisMonth'
-                                ? 'This Month'
-                                : 'Custom Date'}
-                              )
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setMailDateFilter('all');
-                                setMailDateStart('');
-                                setMailDateEnd('');
-                              }}
-                              className="hover:text-indigo-900 cursor-pointer p-0.5"
-                              title="Clear date filter"
-                            >
-                              <X className="w-3 h-3" />
-                            </button>
-                          </span>
-                        ) : mailFolder === 'INBOX' && selectedMailAccount?.unreadCount !== undefined && selectedMailAccount.unreadCount > 0 ? (
-                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-100">
+                        <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200/70 shrink-0">
+                          {filteredMailMessages.length} emails
+                        </span>
+                        {mailFolder === 'INBOX' && selectedMailAccount?.unreadCount !== undefined && selectedMailAccount.unreadCount > 0 && (
+                          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">
                             {selectedMailAccount.unreadCount} unread
-                          </span>
-                        ) : (
-                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-600">
-                            {filteredMailMessages.length} {mailFolder === 'SENT' ? 'sent' : 'emails'}
                           </span>
                         )}
                       </div>
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <span className="text-[10px] text-slate-400 font-medium truncate">
+                        <span className="text-xs text-slate-400 font-mono truncate max-w-[180px] sm:max-w-[260px] leading-tight mt-0.5" title={selectedMailAccount?.emailAddress}>
                           {selectedMailAccount?.emailAddress || 'Connected Mailbox'}
                         </span>
                         {selectedMailAccount?.isShared && (
@@ -7945,57 +8447,365 @@ function WorkspaceShellContent() {
                     </div>
                   </div>
 
-                  {/* Middle: Gmail Category & Filter Tabs */}
-                  <div className="hidden md:flex items-center gap-3">
-                    {mailFolder === 'INBOX' && (
-                      <div className="flex items-center gap-1 bg-slate-50/90 border border-slate-200/80 rounded-xl p-1 shadow-2xs">
-                        {(['unhandled', 'done', 'all'] as const).map((st) => (
+                  {/* Right: Pagination & Live Sync */}
+                  <div className="flex items-center gap-2 shrink-0">
+                    {/* Pagination */}
+                    {mailTotalMessages > 0 && (
+                      <div className="h-8.5 flex items-center gap-1.5 bg-white border border-slate-200/90 rounded-xl px-2.5 text-xs font-medium text-slate-700 shadow-2xs shrink-0">
+                        <span>
+                          {selectedTagFilter !== 'all' || mailDateFilter !== 'all' || emailFilterMode !== 'all'
+                            ? `${filteredMailMessages.length} of ${mailTotalMessages}`
+                            : `${Math.min((mailPage - 1) * 100 + 1, mailTotalMessages)}–${Math.min(mailPage * 100, mailTotalMessages)} of ${mailTotalMessages}`}
+                        </span>
+                        <div className="flex items-center ml-1 border-l border-slate-200 pl-1">
                           <button
-                            key={st}
                             type="button"
-                            onClick={() => setMailStatusFilter(st)}
-                            className={`px-2.5 py-1 rounded-lg text-xs font-bold capitalize transition-all cursor-pointer ${
-                              mailStatusFilter === st
-                                ? st === 'unhandled'
-                                  ? 'bg-amber-500 text-white shadow-2xs'
-                                  : st === 'done'
-                                  ? 'bg-emerald-600 text-white shadow-2xs'
-                                  : 'bg-indigo-600 text-white shadow-2xs'
-                                : 'text-slate-500 hover:text-slate-900 hover:bg-white/60 font-semibold'
-                            }`}
+                            disabled={mailPage <= 1 || isMailLoading}
+                            onClick={() => loadMailMessages(selectedMailAccountId, mailFolder, mailSearchQuery, mailPage - 1)}
+                            className="p-1 hover:text-indigo-600 disabled:opacity-30 disabled:hover:text-slate-400 cursor-pointer rounded"
+                            title="Previous page"
                           >
-                            {st === 'unhandled' ? '⚡ Needs Action' : st === 'done' ? '✅ Done' : 'All'}
+                            <ChevronLeft className="w-3.5 h-3.5" />
                           </button>
-                        ))}
+                          <button
+                            type="button"
+                            disabled={mailPage >= mailTotalPages || isMailLoading}
+                            onClick={() => loadMailMessages(selectedMailAccountId, mailFolder, mailSearchQuery, mailPage + 1)}
+                            className="p-1 hover:text-indigo-600 disabled:opacity-30 disabled:hover:text-slate-400 cursor-pointer rounded"
+                            title="Next page"
+                          >
+                            <ChevronRight className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
                     )}
 
-                    <div className="flex items-center gap-1 bg-slate-50/90 border border-slate-200/80 rounded-xl p-1 shadow-2xs">
-                      {(['all', 'unread', 'starred'] as const).map((mode) => (
-                        <button
-                          key={mode}
-                          type="button"
-                          onClick={() => setEmailFilterMode(mode)}
-                          className={`px-2.5 py-1 rounded-lg text-xs font-semibold capitalize transition-all cursor-pointer ${
-                            emailFilterMode === mode
-                              ? 'text-indigo-700 font-bold bg-white shadow-2xs'
-                              : 'text-slate-400 hover:text-slate-700'
-                          }`}
-                        >
-                          {mode}
-                        </button>
-                      ))}
+                    {/* Interactive Live Sync */}
+                    {selectedMailAccount?.isShared && !canManageGroupMail ? (
+                      <div
+                        className="h-8.5 flex items-center gap-1.5 rounded-xl bg-slate-100 border border-slate-200/90 px-3 text-xs font-semibold text-slate-500 shadow-2xs shrink-0 cursor-default select-none"
+                        title="Group mailbox sync is managed by Workspace Admins & Owners"
+                      >
+                        <Lock className="h-3.5 w-3.5 text-slate-400" />
+                        <span>Synced by Admins</span>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleSyncMailAccount()}
+                        className="h-8.5 flex items-center gap-1.5 rounded-xl bg-emerald-50/90 hover:bg-emerald-100/90 border border-emerald-200/80 px-3 text-xs font-bold text-emerald-700 shadow-2xs shrink-0 transition-all active:scale-95 cursor-pointer"
+                        title="Click to sync live emails with Gmail"
+                      >
+                        <span className={`h-2 w-2 rounded-full bg-emerald-500 ${isMailLoading ? 'animate-ping' : 'animate-pulse'}`} />
+                        <span>{isMailLoading ? 'Syncing...' : 'Live Sync'}</span>
+                      </button>
+                    )}
+                  </div>
+                </header>
+
+                {/* ── ROW 2: Dedicated Filter & Workflow Sub-toolbar ── */}
+                <div className="min-h-12 py-1.5 px-4 sm:px-6 bg-slate-50/90 border-b border-slate-200/80 flex flex-wrap items-center justify-between gap-2.5 shrink-0 relative z-30">
+                  {/* Left: Workflow pills & Filters */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Status Workflow Pill: Needs Action | Done | All */}
+                    {mailFolder === 'INBOX' && (
+                      <div className="flex items-center bg-white border border-slate-200/90 rounded-xl p-0.5 shadow-2xs h-8 shrink-0">
+                        {(['unhandled', 'done', 'all'] as const).map((st) => {
+                          const isActive = mailStatusFilter === st;
+                          return (
+                            <button
+                              key={st}
+                              type="button"
+                              onClick={() => setMailStatusFilter(st)}
+                              className={`h-7 px-2.5 rounded-lg text-xs font-bold capitalize transition-all cursor-pointer flex items-center gap-1.5 ${
+                                isActive
+                                  ? st === 'unhandled'
+                                    ? 'bg-amber-500 text-white shadow-xs'
+                                    : st === 'done'
+                                    ? 'bg-emerald-600 text-white shadow-xs'
+                                    : 'bg-slate-800 text-white shadow-xs'
+                                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                              }`}
+                            >
+                              <span>{st === 'unhandled' ? '⚡ Needs Action' : st === 'done' ? '✅ Done' : 'All'}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Read Mode: All | Unread | Starred */}
+                    <div className="flex items-center bg-white border border-slate-200/90 rounded-xl p-0.5 shadow-2xs h-8 shrink-0">
+                      {(['all', 'unread', 'starred'] as const).map((mode) => {
+                        const isActive = emailFilterMode === mode;
+                        return (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => setEmailFilterMode(mode)}
+                            className={`h-7 px-2.5 rounded-lg text-xs font-semibold capitalize transition-all cursor-pointer ${
+                              isActive
+                                ? 'bg-indigo-50 text-indigo-700 font-bold shadow-xs'
+                                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                            }`}
+                          >
+                            {mode}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* FRONT-STYLE TAGS & LABELS FILTER DROPDOWN POPOVER */}
+                    <div className="relative" ref={mailHeaderTagPopoverRef}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowMailHeaderTagPopover(!showMailHeaderTagPopover);
+                          setShowMailDatePopover(false);
+                        }}
+                        className={`h-8 flex items-center gap-1.5 px-2.5 rounded-xl text-xs font-medium border transition-all cursor-pointer shadow-2xs ${
+                          selectedTagFilter !== 'all'
+                            ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-bold shadow-indigo-100'
+                            : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700 hover:text-slate-900'
+                        }`}
+                        title="Filter emails by tag or label"
+                      >
+                        <Tag className={`w-3.5 h-3.5 shrink-0 ${selectedTagFilter !== 'all' ? 'text-indigo-600' : 'text-slate-400'}`} />
+                        {selectedTagFilter === 'all' ? (
+                          <>
+                            <span>Tags</span>
+                            <span className="px-1.5 py-0.5 rounded-md bg-slate-200/60 text-slate-600 text-[10px] font-bold">
+                              {allAvailableTags.length}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            {(() => {
+                              const tagStyle = getTagStyle(selectedTagFilter, customMailTags);
+                              return (
+                                <span className="flex items-center gap-1.5 max-w-[120px] truncate">
+                                  <span
+                                    className="h-2 w-2 rounded-full shrink-0"
+                                    style={{ backgroundColor: tagStyle.color }}
+                                  />
+                                  <span className="truncate">{selectedTagFilter}</span>
+                                </span>
+                              );
+                            })()}
+                            <span
+                              role="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedTagFilter('all');
+                              }}
+                              className="p-0.5 rounded-full hover:bg-indigo-200/60 text-indigo-500 hover:text-indigo-800 transition-colors"
+                              title="Clear tag filter"
+                            >
+                              <X className="w-3 h-3" />
+                            </span>
+                          </>
+                        )}
+                        <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${showMailHeaderTagPopover ? 'rotate-180' : ''}`} />
+                      </button>
+
+                      {showMailHeaderTagPopover && (
+                        <div className="absolute top-full left-0 mt-1.5 w-72 bg-white rounded-2xl shadow-2xl border border-slate-200/90 z-50 p-3 space-y-2.5 animate-in fade-in zoom-in-95">
+                          {/* Popover Header */}
+                          <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                            <span className="text-xs font-black text-slate-900 flex items-center gap-1.5">
+                              <Tag className="w-3.5 h-3.5 text-indigo-600" />
+                              Tags & Labels
+                              <span className="text-[10px] font-bold text-slate-400">
+                                ({allAvailableTags.length})
+                              </span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowMailHeaderTagPopover(false);
+                                setNewTagName(mailHeaderTagSearch.trim());
+                                setNewTagColor(TAG_COLOR_PALETTES[0].color);
+                                setShowCreateTagModal(true);
+                              }}
+                              className="text-[11px] text-indigo-600 hover:text-indigo-800 font-bold flex items-center gap-1 hover:underline cursor-pointer"
+                            >
+                              <Plus className="w-3 h-3" />
+                              New Tag
+                            </button>
+                          </div>
+
+                          {/* Search Input */}
+                          <div className="relative">
+                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                            <input
+                              type="text"
+                              value={mailHeaderTagSearch}
+                              onChange={(e) => setMailHeaderTagSearch(e.target.value)}
+                              placeholder="Search or filter tags..."
+                              className="w-full pl-8 pr-7 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-medium text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                            />
+                            {mailHeaderTagSearch && (
+                              <button
+                                type="button"
+                                onClick={() => setMailHeaderTagSearch('')}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-600 rounded-full"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Tags List */}
+                          <div className="max-h-56 overflow-y-auto space-y-0.5 pr-0.5">
+                            {/* Option 1: All Tags */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedTagFilter('all');
+                                setShowMailHeaderTagPopover(false);
+                              }}
+                              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                                selectedTagFilter === 'all'
+                                  ? 'bg-indigo-50 text-indigo-700 font-bold border border-indigo-100'
+                                  : 'text-slate-600 hover:bg-slate-50'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="h-2.5 w-2.5 rounded-full bg-slate-300 shrink-0" />
+                                <span>All Tags</span>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[10px] text-slate-400 font-bold">
+                                  {visibleMessagesInView.length}
+                                </span>
+                                {selectedTagFilter === 'all' && (
+                                  <Check className="w-3.5 h-3.5 text-indigo-600" />
+                                )}
+                              </div>
+                            </button>
+
+                            {/* Tags Iteration */}
+                            {allAvailableTags
+                              .filter((t) =>
+                                t.name.toLowerCase().includes(mailHeaderTagSearch.toLowerCase().trim()),
+                              )
+                              .map((tag) => {
+                                const isSelected = selectedTagFilter.trim().toLowerCase() === tag.name.trim().toLowerCase();
+                                const count = mailTagCounts[tag.name] || 0;
+                                return (
+                                  <button
+                                    type="button"
+                                    key={tag.name}
+                                    className={`w-full group flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer text-left ${
+                                      isSelected
+                                        ? 'bg-indigo-50 text-indigo-700 font-bold border border-indigo-100'
+                                        : 'text-slate-700 hover:bg-slate-50'
+                                    }`}
+                                    onClick={() => {
+                                      if (isSelected) {
+                                        setSelectedTagFilter('all');
+                                      } else {
+                                        setSelectedTagFilter(tag.name);
+                                      }
+                                      setShowMailHeaderTagPopover(false);
+                                    }}
+                                  >
+                                    <div className="flex items-center gap-2 truncate">
+                                      <span
+                                        className="h-2.5 w-2.5 rounded-full shrink-0 shadow-2xs"
+                                        style={{ backgroundColor: tag.color }}
+                                      />
+                                      <span className="truncate">{tag.name}</span>
+                                      {tag.isCustom && (
+                                        <span className="text-[9px] px-1 py-0.2 rounded bg-slate-100 text-slate-400 font-bold uppercase tracking-wider">
+                                          custom
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                      {count > 0 && (
+                                        <span className="text-[10px] text-slate-400 font-bold">
+                                          {count}
+                                        </span>
+                                      )}
+                                      {isSelected && (
+                                        <Check className="w-3.5 h-3.5 text-indigo-600" />
+                                      )}
+                                      {tag.isCustom && tag.id && (
+                                        <span
+                                          role="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleDeleteCustomTag(tag.id!, tag.name, e);
+                                          }}
+                                          className="opacity-0 group-hover:opacity-100 p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-all cursor-pointer"
+                                          title={`Delete custom tag "${tag.name}"`}
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                        </span>
+                                      )}
+                                    </div>
+                                  </button>
+                                );
+                              })}
+
+                            {/* No matches fallback */}
+                            {mailHeaderTagSearch.trim() &&
+                              !allAvailableTags.some((t) =>
+                                t.name.toLowerCase().includes(mailHeaderTagSearch.toLowerCase().trim()),
+                              ) && (
+                                <div className="p-3 text-center space-y-2">
+                                  <p className="text-xs text-slate-400">No matching tags found</p>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setShowMailHeaderTagPopover(false);
+                                      setNewTagName(mailHeaderTagSearch.trim());
+                                      setNewTagColor(TAG_COLOR_PALETTES[0].color);
+                                      setShowCreateTagModal(true);
+                                    }}
+                                    className="w-full py-1.5 px-2 rounded-xl text-xs font-bold text-indigo-600 hover:text-indigo-700 bg-indigo-50 hover:bg-indigo-100 transition-colors flex items-center justify-center gap-1 cursor-pointer"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                    <span>Create &quot;{mailHeaderTagSearch.trim()}&quot;</span>
+                                  </button>
+                                </div>
+                              )}
+                          </div>
+
+                          {/* Popover Bottom Action: Create New Tag */}
+                          <div className="border-t border-slate-100 pt-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowMailHeaderTagPopover(false);
+                                setNewTagName(mailHeaderTagSearch.trim());
+                                setNewTagColor(TAG_COLOR_PALETTES[0].color);
+                                setShowCreateTagModal(true);
+                              }}
+                              className="w-full py-1.5 rounded-xl bg-slate-50 hover:bg-indigo-50 border border-slate-200/80 hover:border-indigo-200 text-slate-700 hover:text-indigo-700 text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                            >
+                              <Plus className="w-3.5 h-3.5 text-indigo-600" />
+                              <span>Create New Tag</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     {/* Date Range & Timing Filter Popover */}
                     <div className="relative" ref={mailDatePopoverRef}>
                       <button
                         type="button"
-                        onClick={() => setShowMailDatePopover(!showMailDatePopover)}
-                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-semibold border transition-all cursor-pointer shadow-2xs ${
+                        onClick={() => {
+                          setShowMailDatePopover(!showMailDatePopover);
+                          setShowMailHeaderTagPopover(false);
+                        }}
+                        className={`h-8 flex items-center gap-1.5 px-2.5 rounded-xl text-xs font-medium border transition-all cursor-pointer shadow-2xs ${
                           mailDateFilter !== 'all'
                             ? 'bg-indigo-50 border-indigo-200 text-indigo-700 font-bold'
-                            : 'bg-slate-50/90 border-slate-200/80 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                            : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700 hover:text-slate-900'
                         }`}
                         title="Filter emails by date"
                       >
@@ -8017,11 +8827,27 @@ function WorkspaceShellContent() {
                             ? `${mailDateStart.slice(5)} to ${mailDateEnd.slice(5)}`
                             : 'Custom Date'}
                         </span>
-                        <ChevronDown className="w-3 h-3 text-slate-400" />
+                        {mailDateFilter !== 'all' ? (
+                          <span
+                            role="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setMailDateFilter('all');
+                              setMailDateStart('');
+                              setMailDateEnd('');
+                            }}
+                            className="p-0.5 rounded-full hover:bg-indigo-200/60 text-indigo-500 hover:text-indigo-800 transition-colors ml-0.5"
+                            title="Clear date filter"
+                          >
+                            <X className="w-3 h-3" />
+                          </span>
+                        ) : (
+                          <ChevronDown className="w-3 h-3 text-slate-400" />
+                        )}
                       </button>
 
                       {showMailDatePopover && (
-                        <div className="absolute top-full left-0 mt-1.5 w-72 bg-white rounded-2xl shadow-xl border border-slate-200/90 z-30 p-3.5 space-y-3 animate-in fade-in zoom-in-95">
+                        <div className="absolute top-full left-0 mt-2 w-72 bg-white rounded-2xl shadow-2xl border border-slate-200/90 z-50 p-3.5 space-y-3 animate-in fade-in zoom-in-95">
                           <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                             <span className="text-xs font-black text-slate-900 flex items-center gap-1.5">
                               <Calendar className="w-3.5 h-3.5 text-indigo-600" />
@@ -8113,57 +8939,26 @@ function WorkspaceShellContent() {
                     </div>
                   </div>
 
-                  {/* Right: Pagination + Interactive Live Sync */}
-                  <div className="flex items-center gap-2 shrink-0">
-                    {mailTotalMessages > 0 && (
-                      <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200/90 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-600 shadow-2xs">
-                        <span>
-                          {Math.min((mailPage - 1) * 100 + 1, mailTotalMessages)}–{Math.min(mailPage * 100, mailTotalMessages)} of {mailTotalMessages}
-                        </span>
-                        <div className="flex items-center ml-1 border-l border-slate-200 pl-1">
-                          <button
-                            type="button"
-                            disabled={mailPage <= 1 || isMailLoading}
-                            onClick={() => loadMailMessages(selectedMailAccountId, mailFolder, mailSearchQuery, mailPage - 1)}
-                            className="p-1 hover:text-indigo-600 disabled:opacity-30 disabled:hover:text-slate-400 cursor-pointer rounded"
-                            title="Previous page"
-                          >
-                            <ChevronLeft className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            disabled={mailPage >= mailTotalPages || isMailLoading}
-                            onClick={() => loadMailMessages(selectedMailAccountId, mailFolder, mailSearchQuery, mailPage + 1)}
-                            className="p-1 hover:text-indigo-600 disabled:opacity-30 disabled:hover:text-slate-400 cursor-pointer rounded"
-                            title="Next page"
-                          >
-                            <ChevronRight className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {selectedMailAccount?.isShared && !canManageGroupMail ? (
-                      <div
-                        className="flex items-center gap-1.5 rounded-xl bg-slate-100 border border-slate-200/90 px-3 py-1.5 text-xs font-semibold text-slate-500 shadow-2xs shrink-0 cursor-default select-none"
-                        title="Group mailbox sync is managed by Workspace Admins & Owners"
-                      >
-                        <Lock className="h-3.5 w-3.5 text-slate-400" />
-                        <span>Synced by Admins</span>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => handleSyncMailAccount()}
-                        className="flex items-center gap-1.5 rounded-xl bg-emerald-50/90 hover:bg-emerald-100/90 border border-emerald-200/80 px-3 py-1.5 text-xs font-bold text-emerald-700 shadow-2xs shrink-0 transition-all active:scale-95 cursor-pointer"
-                        title="Click to sync live emails with Gmail"
-                      >
-                        <span className={`h-2 w-2 rounded-full bg-emerald-500 ${isMailLoading ? 'animate-ping' : 'animate-pulse'}`} />
-                        <span>{isMailLoading ? 'Syncing...' : 'Live Sync'}</span>
-                      </button>
-                    )}
-                  </div>
-                </header>
+                  {/* Right: Reset all filters if active */}
+                  {(selectedTagFilter !== 'all' || mailDateFilter !== 'all' || (mailFolder === 'INBOX' && mailStatusFilter !== 'unhandled') || emailFilterMode !== 'all') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedTagFilter('all');
+                        setMailDateFilter('all');
+                        setMailDateStart('');
+                        setMailDateEnd('');
+                        if (mailFolder === 'INBOX') setMailStatusFilter('unhandled');
+                        setEmailFilterMode('all');
+                      }}
+                      className="h-7 px-2.5 rounded-lg text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-200/70 transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
+                      title="Reset all filters to default"
+                    >
+                      <X className="w-3.5 h-3.5 text-slate-400" />
+                      <span>Reset filters</span>
+                    </button>
+                  )}
+                </div>
 
                 {/* SPAM Folder Advisory Banner */}
                 {mailFolder === 'SPAM' && (
@@ -8181,50 +8976,6 @@ function WorkspaceShellContent() {
                     </div>
                   </div>
                 )}
-
-                {/* Mobile Filter Sub-bar */}
-                <div className="md:hidden px-4 py-2 border-b border-slate-100 bg-white flex items-center justify-between gap-2 overflow-x-auto">
-                  <div className="flex items-center gap-1">
-                    {(['unhandled', 'done', 'all'] as const).map((st) => (
-                      <button
-                        key={st}
-                        type="button"
-                        onClick={() => setMailStatusFilter(st)}
-                        className={`px-2 py-1 rounded-lg text-xs font-bold capitalize transition-all ${
-                          mailStatusFilter === st
-                            ? 'bg-indigo-600 text-white'
-                            : 'text-slate-500 hover:bg-slate-100'
-                        }`}
-                      >
-                        {st === 'unhandled' ? '⚡ Needs Action' : st === 'done' ? '✅ Done' : 'All'}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="flex items-center gap-1">
-                    {(['all', 'unread', 'starred'] as const).map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        onClick={() => setEmailFilterMode(mode)}
-                        className={`px-2 py-1 rounded-lg text-xs font-semibold capitalize ${
-                          emailFilterMode === mode ? 'text-indigo-600 font-bold bg-indigo-50' : 'text-slate-400'
-                        }`}
-                      >
-                        {mode}
-                      </button>
-                    ))}
-                    <button
-                      type="button"
-                      onClick={() => setShowMailDatePopover(!showMailDatePopover)}
-                      className={`px-2 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 shrink-0 cursor-pointer ${
-                        mailDateFilter !== 'all' ? 'text-indigo-600 font-bold bg-indigo-50 border border-indigo-200' : 'text-slate-400 hover:text-slate-600'
-                      }`}
-                    >
-                      <Calendar className="w-3 h-3" />
-                      <span>{mailDateFilter !== 'all' ? (mailDateFilter === 'custom' ? 'Custom' : mailDateFilter) : 'Date'}</span>
-                    </button>
-                  </div>
-                </div>
 
                 {/* Reauth / Permission Warning Banner */}
                 {selectedMailAccount?.provider === 'GOOGLE' && selectedMailAccount?.requiresReauth && (
@@ -8261,11 +9012,29 @@ function WorkspaceShellContent() {
                         <Inbox className="w-7 h-7" />
                       </div>
                       <div>
-                        <p className="text-sm font-bold text-slate-700">No emails in {mailFolder.toLowerCase()}</p>
-                        <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
-                          {mailDateFilter !== 'all' ? (
-                            <span>
-                              No emails match the selected date filter.{' '}
+                        <p className="text-sm font-bold text-slate-700">
+                          {selectedTagFilter !== 'all'
+                            ? `No emails tagged "${selectedTagFilter}"`
+                            : mailDateFilter !== 'all'
+                            ? 'No emails found for selected date'
+                            : `No emails in ${mailFolder.toLowerCase()}`}
+                        </p>
+                        <div className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                          {selectedTagFilter !== 'all' ? (
+                            <div className="space-y-2">
+                              <p>There are no emails matching tag &quot;{selectedTagFilter}&quot; in this view.</p>
+                              <button
+                                type="button"
+                                onClick={() => setSelectedTagFilter('all')}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold border border-indigo-200 transition-all cursor-pointer"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                                <span>Clear tag filter</span>
+                              </button>
+                            </div>
+                          ) : mailDateFilter !== 'all' ? (
+                            <div className="space-y-2">
+                              <p>No emails match the selected date filter.</p>
                               <button
                                 type="button"
                                 onClick={() => {
@@ -8273,11 +9042,12 @@ function WorkspaceShellContent() {
                                   setMailDateStart('');
                                   setMailDateEnd('');
                                 }}
-                                className="text-indigo-600 font-bold hover:underline cursor-pointer"
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold border border-indigo-200 transition-all cursor-pointer"
                               >
-                                Clear date filter
+                                <X className="w-3.5 h-3.5" />
+                                <span>Clear date filter</span>
                               </button>
-                            </span>
+                            </div>
                           ) : mailStatusFilter === 'unhandled' ? (
                             'All caught up! No messages need action.'
                           ) : mailStatusFilter === 'done' ? (
@@ -8285,7 +9055,7 @@ function WorkspaceShellContent() {
                           ) : (
                             'Your inbox is completely caught up!'
                           )}
-                        </p>
+                        </div>
                       </div>
                       {mailAccounts.length === 0 && (
                         <button
@@ -8384,6 +9154,34 @@ function WorkspaceShellContent() {
                               {msg.subject || '(no subject)'}
                             </span>
 
+                            {/* Front-Style Tags Badges */}
+                            {Array.isArray(msg.tags) && msg.tags.length > 0 && (
+                              <div className="flex items-center gap-1 shrink-0">
+                                {msg.tags.slice(0, 3).map((tagName) => {
+                                  const style = getTagStyle(tagName, customMailTags);
+                                  return (
+                                    <span
+                                      key={tagName}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedTagFilter(selectedTagFilter.trim().toLowerCase() === tagName.trim().toLowerCase() ? 'all' : tagName);
+                                      }}
+                                      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-bold border ${style.bg} ${style.text} ${style.border} hover:opacity-85 transition-opacity cursor-pointer shadow-2xs`}
+                                      title={`Filter by tag: ${tagName}`}
+                                    >
+                                      <span className="h-1.5 w-1.5 rounded-full shrink-0" style={{ backgroundColor: style.color }} />
+                                      <span>{tagName}</span>
+                                    </span>
+                                  );
+                                })}
+                                {msg.tags.length > 3 && (
+                                  <span className="px-1.5 py-0.5 rounded-md text-[9px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                                    +{msg.tags.length - 3}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+
                             {/* Dash Separator */}
                             <span className="text-slate-300 text-xs shrink-0">—</span>
 
@@ -8411,6 +9209,82 @@ function WorkspaceShellContent() {
                           <div className="flex items-center gap-1 shrink-0 ml-2">
                             {/* Hover Action Buttons */}
                             <div className="hidden group-hover:flex items-center gap-1 bg-white px-1.5 py-0.5 rounded-lg border border-slate-200/90 shadow-2xs">
+                              {/* Quick Apply Tag Button */}
+                              <div className="relative" data-row-tag-popover>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setRowTagPopoverMsgId(rowTagPopoverMsgId === msg.id ? null : msg.id);
+                                  }}
+                                  className={`p-1 rounded transition-colors ${
+                                    rowTagPopoverMsgId === msg.id
+                                      ? 'text-indigo-600 bg-indigo-50'
+                                      : 'text-slate-400 hover:text-indigo-600 hover:bg-slate-100'
+                                  }`}
+                                  title="Add or remove tags"
+                                >
+                                  <Tag className="w-3.5 h-3.5" />
+                                </button>
+                                {rowTagPopoverMsgId === msg.id && (
+                                  <div
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="absolute right-0 top-full mt-1.5 w-52 bg-white rounded-2xl shadow-2xl border border-slate-200/90 z-50 p-2.5 space-y-1.5 animate-in fade-in zoom-in-95 text-left"
+                                  >
+                                    <div className="px-1 py-0.5 text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center justify-between border-b border-slate-100 pb-1">
+                                      <span>Apply Tag</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => setRowTagPopoverMsgId(null)}
+                                        className="p-0.5 text-slate-400 hover:text-slate-600 rounded"
+                                      >
+                                        <X className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                    <div className="max-h-48 overflow-y-auto space-y-0.5 pr-0.5">
+                                      {allAvailableTags.map((tag) => {
+                                        const isApplied = (msg.tags || []).some(
+                                          (t) => t.trim().toLowerCase() === tag.name.trim().toLowerCase(),
+                                        );
+                                        return (
+                                          <button
+                                            key={tag.name}
+                                            type="button"
+                                            onClick={() => handleToggleEmailTag(msg.id, tag.name)}
+                                            className={`w-full flex items-center justify-between px-2 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                                              isApplied
+                                                ? `${tag.bg} ${tag.text} font-bold border ${tag.border}`
+                                                : 'text-slate-700 hover:bg-slate-50'
+                                            }`}
+                                          >
+                                            <div className="flex items-center gap-1.5 min-w-0 truncate">
+                                              <span
+                                                className="h-2 w-2 rounded-full shrink-0"
+                                                style={{ backgroundColor: tag.color }}
+                                              />
+                                              <span className="truncate">{tag.name}</span>
+                                            </div>
+                                            {isApplied && <Check className="w-3.5 h-3.5 shrink-0" />}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                    <div className="pt-1 border-t border-slate-100">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setRowTagPopoverMsgId(null);
+                                          setShowCreateTagModal(true);
+                                        }}
+                                        className="w-full flex items-center justify-center gap-1 py-1 rounded-lg text-xs font-bold text-indigo-600 hover:bg-indigo-50 transition-colors cursor-pointer"
+                                      >
+                                        <Plus className="w-3 h-3" />
+                                        <span>Create New Tag</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
                               <button
                                 type="button"
                                 onClick={(e) => {
@@ -9080,11 +9954,12 @@ function WorkspaceShellContent() {
               </div>
             </div>
           ) : (
-            <div className="flex items-center gap-3 min-w-0 shrink">
+            <div className="flex items-center gap-2.5 min-w-0">
               <button
+                type="button"
                 onClick={() => setIsStarred(!isStarred)}
-                className="text-slate-400 hover:text-amber-500 transition-colors p-1 shrink-0"
-                title="Star channel"
+                className="text-slate-400 hover:text-amber-500 transition-colors p-1 shrink-0 rounded-lg hover:bg-slate-50"
+                title={isStarred ? "Unstar channel" : "Star channel"}
               >
                 <Star
                   className={`h-4 w-4 ${
@@ -9094,7 +9969,7 @@ function WorkspaceShellContent() {
               </button>
 
               <div className="flex items-center gap-2.5 min-w-0">
-                <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-50 border border-indigo-200/80 text-indigo-600 shrink-0">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-50/80 border border-indigo-200/80 text-indigo-600 shrink-0 shadow-2xs">
                   {activeChannel?.isPrivate ? (
                     <Lock className="h-4 w-4 text-amber-500" />
                   ) : (
@@ -9102,15 +9977,15 @@ function WorkspaceShellContent() {
                   )}
                 </div>
                 <div className="flex flex-col min-w-0 justify-center">
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-black text-slate-900 text-base tracking-tight leading-tight shrink-0">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="font-black text-slate-900 text-base tracking-tight leading-tight truncate">
                       {activeChannel?.name}
                     </span>
                     {activeChannel && canEditChannel(currentUserRole, activeChannel?.createdById === user?.id) && (
                       <button
                         type="button"
                         onClick={() => openEditChannelModal(activeChannel)}
-                        className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                        className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors shrink-0"
                         title="Edit channel name & topic"
                       >
                         <Pencil className="h-3.5 w-3.5" />
@@ -9120,46 +9995,58 @@ function WorkspaceShellContent() {
                       <button
                         type="button"
                         onClick={() => setChannelToDelete(activeChannel)}
-                        className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                        className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors shrink-0"
                         title="Delete channel"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     )}
-
-                    {/* Cross-Module Bridge: Linked Group Mailbox Badge */}
-                    {activeChannel && (() => {
-                      const linkedMailAcc = mailAccounts.find((a) => a.channelId === activeChannel.id || a.channelName === activeChannel.name);
-                      if (!linkedMailAcc) return null;
-                      return (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedMailAccountId(linkedMailAcc.id);
-                            handleSwitchAppTab('mail');
-                          }}
-                          className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[11px] font-bold border border-indigo-200/80 transition-all cursor-pointer shadow-2xs shrink-0 ml-1"
-                          title={`Open linked group mailbox (${linkedMailAcc.emailAddress}) in Mail Studio`}
-                        >
-                          <Mail className="w-3 h-3 text-indigo-600 shrink-0" />
-                          <span className="font-mono truncate max-w-[140px]">{linkedMailAcc.emailAddress}</span>
-                          {linkedMailAcc.unreadCount !== undefined && linkedMailAcc.unreadCount > 0 && (
-                            <span className="px-1 py-0.1 rounded-full bg-indigo-600 text-white text-[9px] font-black shrink-0">
-                              {linkedMailAcc.unreadCount}
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })()}
                   </div>
-                  {activeChannel?.topic && (
-                    <span
-                      className="text-xs text-slate-500 truncate max-w-sm md:max-w-md lg:max-w-xl font-normal leading-tight mt-0.5"
-                      title={activeChannel.topic}
-                    >
-                      {activeChannel.topic}
-                    </span>
-                  )}
+                  {(() => {
+                    const linkedMail = mailAccounts.find((a) => a.channelId === activeChannel?.id || a.channelName === activeChannel?.name);
+                    const unreadCount = (linkedMail?.unreadCount ?? linkedMail?.unhandledCount) || 0;
+
+                    if (!linkedMail && !activeChannel?.topic) return null;
+
+                    return (
+                      <div className="flex items-center gap-2 min-w-0 mt-0.5 leading-tight">
+                        {linkedMail && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedMailAccountId(linkedMail.id);
+                              handleSwitchAppTab('mail');
+                            }}
+                            className="inline-flex items-center gap-1.5 text-xs font-mono font-medium text-slate-500 hover:text-indigo-600 hover:underline transition-colors shrink-0 cursor-pointer group"
+                            title={`Linked group mailbox: ${linkedMail.emailAddress} - Click to open in Mail Studio`}
+                          >
+                            <Mail className="h-3 w-3 text-indigo-500 shrink-0 group-hover:scale-110 transition-transform" />
+                            <span className="truncate max-w-[180px] sm:max-w-[240px] md:max-w-[300px]">
+                              {linkedMail.emailAddress}
+                            </span>
+                            {unreadCount > 0 && (
+                              <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-white text-[9px] font-black shrink-0 shadow-2xs">
+                                {unreadCount}
+                              </span>
+                            )}
+                          </button>
+                        )}
+
+                        {linkedMail && activeChannel?.topic && (
+                          <span className="text-slate-300 text-xs shrink-0 select-none">•</span>
+                        )}
+
+                        {activeChannel?.topic && (
+                          <span
+                            className="text-xs text-slate-400 truncate max-w-xs sm:max-w-sm md:max-w-md lg:max-w-lg font-normal leading-tight"
+                            title={activeChannel.topic}
+                          >
+                            {activeChannel.topic}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
@@ -9172,7 +10059,7 @@ function WorkspaceShellContent() {
               <button
                 type="button"
                 onClick={() => setShowCalendarView(false)}
-                className="flex items-center gap-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 py-1.5 text-xs font-semibold transition-all shrink-0"
+                className="h-8.5 flex items-center gap-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 px-3 text-xs font-semibold transition-all shrink-0 cursor-pointer"
               >
                 <X className="h-3.5 w-3.5" />
                 <span>Back to Chat</span>
@@ -9185,72 +10072,41 @@ function WorkspaceShellContent() {
                 <button
                   type="button"
                   onClick={() => handleStartCall(activeRecipient, false)}
-                  className="flex items-center gap-1.5 rounded-xl bg-white border border-slate-200 hover:bg-emerald-50 hover:border-emerald-300 hover:text-emerald-700 px-3 py-1.5 text-xs font-semibold text-slate-700 transition-all shrink-0"
+                  className="h-8.5 flex items-center gap-1.5 rounded-xl bg-white border border-slate-200 hover:bg-emerald-50 hover:border-emerald-300 hover:text-emerald-700 px-3 text-xs font-semibold text-slate-700 transition-all shrink-0 shadow-2xs cursor-pointer"
                   title={`Start voice call with ${activeRecipient.name}`}
                 >
-                  <Phone className="h-4 w-4 text-emerald-600 shrink-0" />
+                  <Phone className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
                   <span className="hidden sm:inline font-bold">Voice Call</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => handleStartCall(activeRecipient, true)}
-                  className="flex items-center gap-1.5 rounded-xl bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300 text-indigo-700 px-3 py-1.5 text-xs font-bold transition-all shrink-0"
+                  className="h-8.5 flex items-center gap-1.5 rounded-xl bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300 text-indigo-700 px-3 text-xs font-bold transition-all shrink-0 shadow-2xs cursor-pointer"
                   title={`Start video call with ${activeRecipient.name}`}
                 >
-                  <Video className="h-4 w-4 text-indigo-600 shrink-0" />
+                  <Video className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
                   <span className="hidden sm:inline font-bold">Video Call</span>
                 </button>
               </>
             )}
 
-            {/* Linked Group Mailbox pill for Active Channel */}
-            {!activeRecipient && !showCalendarView && activeChannel && (() => {
-              const channelMail = mailAccounts.find((a) => a.channelId === activeChannel.id);
-              if (channelMail) {
-                return (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedMailAccountId(channelMail.id);
-                      setActiveAppTab('mail');
-                    }}
-                    className="flex items-center gap-1.5 rounded-xl bg-gradient-to-r from-indigo-50 to-purple-50 hover:from-indigo-100 hover:to-purple-100 border border-indigo-200/90 px-2.5 py-1.5 text-xs font-semibold text-indigo-900 transition-all shadow-2xs shrink-0 group"
-                    title={`Group Mailbox: ${channelMail.emailAddress} - Click to open in Mail Studio`}
-                  >
-                    <Mail className="h-3.5 w-3.5 text-indigo-600 group-hover:scale-110 transition-transform shrink-0" />
-                    <span className="font-bold text-indigo-700 hidden lg:inline max-w-[150px] truncate">
-                      {channelMail.emailAddress}
-                    </span>
-                    <span className="font-bold text-indigo-700 lg:hidden">
-                      Group Mail
-                    </span>
-                    {channelMail.unhandledCount !== undefined && channelMail.unhandledCount > 0 && (
-                      <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 text-[10px] font-black rounded-full bg-amber-500 text-white shadow-xs animate-pulse">
-                        {channelMail.unhandledCount}
-                      </span>
-                    )}
-                  </button>
-                );
-              } else if (canManageGroupMail) {
-                return (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setConnectMailMode('group');
-                      setGroupAssignMode('existing');
-                      handleSelectChannelForGroupMail(activeChannel.id);
-                      setShowConnectMailModal(true);
-                    }}
-                    className="flex items-center gap-1 rounded-xl bg-slate-50 hover:bg-indigo-50 border border-dashed border-slate-300 hover:border-indigo-300 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:text-indigo-700 transition-all shrink-0 cursor-pointer"
-                    title="Link a shared group mailbox for this channel (Admins & Owners)"
-                  >
-                    <Mail className="h-3.5 w-3.5 text-indigo-500" />
-                    <span className="hidden xl:inline">+ Link Group Mail</span>
-                  </button>
-                );
-              }
-              return null;
-            })()}
+            {/* When not linked, admins can link a shared group mailbox */}
+            {!activeRecipient && !showCalendarView && activeChannel && !mailAccounts.some((a) => a.channelId === activeChannel.id || a.channelName === activeChannel.name) && canManageGroupMail && (
+              <button
+                type="button"
+                onClick={() => {
+                  setConnectMailMode('group');
+                  setGroupAssignMode('existing');
+                  handleSelectChannelForGroupMail(activeChannel.id);
+                  setShowConnectMailModal(true);
+                }}
+                className="h-8.5 flex items-center gap-1.5 rounded-xl bg-slate-50 hover:bg-indigo-50 border border-dashed border-slate-300 hover:border-indigo-300 px-2.5 text-xs font-semibold text-slate-600 hover:text-indigo-700 transition-all shrink-0 cursor-pointer shadow-2xs"
+                title="Link a shared group mailbox for this channel (Admins & Owners)"
+              >
+                <Mail className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
+                <span className="hidden xl:inline">+ Link Group Mail</span>
+              </button>
+            )}
 
             {/* Instant Team Meeting Button */}
             {!activeRecipient && !showCalendarView && activeChannel && (
@@ -9281,10 +10137,10 @@ function WorkspaceShellContent() {
                   };
                   setActiveTeamMeeting(instantMeeting);
                 }}
-                className="flex items-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 text-xs font-semibold transition-all shadow-xs shrink-0 active:scale-95"
+                className="h-8.5 flex items-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white px-3 text-xs font-semibold transition-all shadow-xs shrink-0 active:scale-95 cursor-pointer"
                 title="Start or join Team Video Meeting"
               >
-                <Video className="h-4 w-4 shrink-0" />
+                <Video className="h-3.5 w-3.5 shrink-0" />
                 <span className="hidden sm:inline">Team Meeting</span>
               </button>
             )}
@@ -9293,7 +10149,7 @@ function WorkspaceShellContent() {
             <button
               type="button"
               onClick={handleLoadPinnedMessages}
-              className="flex items-center gap-1.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 transition-all shrink-0"
+              className="h-8.5 flex items-center gap-1.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 px-3 text-xs font-medium text-slate-700 transition-all shrink-0 shadow-2xs cursor-pointer"
               title="View pinned messages"
             >
               <Pin className="h-3.5 w-3.5 text-amber-500 fill-amber-400 shrink-0" />
@@ -9307,7 +10163,7 @@ function WorkspaceShellContent() {
                 loadWorkspaceRecordings();
                 setShowRecordingsModal(true);
               }}
-              className="flex items-center gap-1.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 transition-all shrink-0"
+              className="h-8.5 flex items-center gap-1.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 px-3 text-xs font-medium text-slate-700 transition-all shrink-0 shadow-2xs cursor-pointer"
               title="View saved recordings"
             >
               <Disc className="h-3.5 w-3.5 text-rose-500 shrink-0" />
@@ -9328,7 +10184,7 @@ function WorkspaceShellContent() {
                   setAddMemberSearchQuery('');
                   setShowAddChannelMemberModal(true);
                 }}
-                className="flex items-center gap-1.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 transition-all shrink-0"
+                className="h-8.5 flex items-center gap-1.5 rounded-xl bg-white border border-slate-200 hover:bg-slate-50 px-3 text-xs font-medium text-slate-700 transition-all shrink-0 shadow-2xs cursor-pointer"
                 title="Add people to this channel"
               >
                 <UserPlus className="h-3.5 w-3.5 text-slate-600 shrink-0" />
@@ -9341,7 +10197,7 @@ function WorkspaceShellContent() {
               <button
                 type="button"
                 onClick={() => setShowHeaderMoreMenu(!showHeaderMoreMenu)}
-                className="p-2 rounded-xl border border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-colors"
+                className="h-8.5 w-8.5 flex items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-colors shadow-2xs cursor-pointer"
                 title="More options"
               >
                 <MoreHorizontal className="h-4 w-4" />
@@ -14874,6 +15730,148 @@ function WorkspaceShellContent() {
                 <span>Send Email</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ───────────────────────────────────────────────────────────── */}
+      {/* FRONT-STYLE CREATE NEW TAG MODAL */}
+      {/* ───────────────────────────────────────────────────────────── */}
+      {showCreateTagModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in">
+          <div className="w-full max-w-md rounded-3xl bg-white border border-slate-200 shadow-2xl p-6 text-slate-800 space-y-5 animate-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-indigo-50 text-indigo-600">
+                  <Tag className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Create New Tag</h3>
+                  <p className="text-[11px] text-slate-400">Add a custom label to categorize emails</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCreateTagModal(false);
+                  setNewTagName('');
+                }}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (newTagName.trim() && !isCreatingTag) {
+                  handleCreateNewTag(newTagName, newTagColor, selectedEmail?.id);
+                }
+              }}
+              className="space-y-4"
+            >
+              {/* Tag Name Input */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                  Tag Name
+                </label>
+                <input
+                  type="text"
+                  autoFocus
+                  value={newTagName}
+                  onChange={(e) => setNewTagName(e.target.value)}
+                  placeholder="e.g. Lead, VIP Client, Partnership, Refund..."
+                  maxLength={30}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                />
+                <div className="flex items-center justify-between mt-1 text-[10px] text-slate-400">
+                  <span>Letters, numbers, spaces</span>
+                  <span>{newTagName.length}/30</span>
+                </div>
+              </div>
+
+              {/* Color Swatch Picker */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Select Color
+                </label>
+                <div className="grid grid-cols-5 gap-2">
+                  {TAG_COLOR_PALETTES.map((palette) => {
+                    const isSelected = newTagColor === palette.color;
+                    return (
+                      <button
+                        key={palette.color}
+                        type="button"
+                        onClick={() => setNewTagColor(palette.color)}
+                        className={`flex items-center gap-1.5 p-2 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
+                          isSelected
+                            ? 'ring-2 ring-indigo-500 border-indigo-500 bg-slate-50 shadow-xs'
+                            : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                        }`}
+                      >
+                        <span
+                          className="h-3.5 w-3.5 rounded-full shrink-0 shadow-2xs"
+                          style={{ backgroundColor: palette.color }}
+                        />
+                        <span className="text-[11px] text-slate-700 truncate">{palette.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Live Preview Box */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                  Live Preview
+                </label>
+                <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200/80 flex items-center justify-between">
+                  <span className="text-xs text-slate-400 font-medium">How it will look:</span>
+                  {(() => {
+                    const palette = TAG_COLOR_PALETTES.find((p) => p.color === newTagColor) || TAG_COLOR_PALETTES[0];
+                    const displayName = newTagName.trim() || 'Sample Tag';
+                    return (
+                      <span
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border ${palette.bg} ${palette.text} ${palette.border} shadow-2xs`}
+                      >
+                        <span
+                          className="h-2 w-2 rounded-full shrink-0"
+                          style={{ backgroundColor: palette.color }}
+                        />
+                        <span>{displayName}</span>
+                      </span>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              {/* Modal Actions */}
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCreateTagModal(false);
+                    setNewTagName('');
+                  }}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!newTagName.trim() || isCreatingTag}
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-bold text-xs shadow-md shadow-indigo-200 transition-all flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
+                >
+                  {isCreatingTag ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Plus className="w-3.5 h-3.5" />
+                  )}
+                  <span>Create Tag</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

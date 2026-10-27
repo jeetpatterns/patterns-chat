@@ -37,6 +37,10 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     return (this as any)['emailMessage'];
   }
 
+  get mailTag(): any {
+    return (this as any)['mailTag'];
+  }
+
   async onModuleInit() {
     try {
       await this.$connect();
