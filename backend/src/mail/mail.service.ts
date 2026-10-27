@@ -5,6 +5,7 @@ import {
   ForbiddenException,
   Inject,
   forwardRef,
+  OnModuleInit,
 } from '@nestjs/common';
 import { PrismaService, EmailProvider, EmailFolder } from '../common/prisma.service.js';
 import { MessagesGateway } from '../messages/messages.gateway.js';
@@ -16,7 +17,7 @@ import { existsSync, mkdirSync, promises as fsPromises } from 'fs';
 
 // Mail Service: Shared Group and Personal Inbox Management
 @Injectable()
-export class MailService {
+export class MailService implements OnModuleInit {
   private accountReauthNeeded = new Map<string, boolean>();
   private googleTokenExpiry = new Map<string, number>();
 
@@ -26,6 +27,22 @@ export class MailService {
     @Inject(forwardRef(() => MessagesGateway))
     private readonly messagesGateway?: MessagesGateway,
   ) {}
+
+  async onModuleInit() {
+    try {
+      await this.prisma.emailAccount.updateMany({
+        where: {
+          isShared: true,
+          allowedDomains: { equals: [] },
+        },
+        data: {
+          allowedDomains: ['patterns247.net'],
+        },
+      });
+    } catch (err: any) {
+      console.warn('Init allowedDomains check:', err?.message || err);
+    }
+  }
 
   // Helper: Verify if user is an ADMIN, OWNER, or Workspace Creator
   async verifyAdminOrOwnerRole(
@@ -248,6 +265,7 @@ export class MailService {
         avatarUrl: acc.avatarUrl,
         isActive: acc.isActive,
         isShared: acc.isShared,
+        allowedDomains: acc.allowedDomains || [],
         channelId: acc.channelId,
         channelName: acc.channel?.name || null,
         channelCreatedById: acc.channel?.createdById || null,
@@ -727,6 +745,7 @@ export class MailService {
       workspaceId?: string;
       channelId?: string;
       isShared?: boolean;
+      allowedDomains?: string[];
     },
   ) {
     // If setting group mailbox / shared status, verify admin or owner role
@@ -773,6 +792,12 @@ export class MailService {
           workspaceId: accountData.workspaceId,
           channelId: accountData.channelId,
           isShared: accountData.isShared || false,
+          allowedDomains:
+            accountData.allowedDomains !== undefined
+              ? accountData.allowedDomains
+              : accountData.isShared || accountData.channelId
+              ? ['patterns247.net']
+              : [],
           lastSyncedAt: new Date(),
         },
       });
@@ -800,6 +825,14 @@ export class MailService {
           workspaceId: accountData.workspaceId || account.workspaceId,
           channelId: accountData.channelId !== undefined ? accountData.channelId : account.channelId,
           isShared: accountData.isShared !== undefined ? accountData.isShared : account.isShared,
+          allowedDomains:
+            accountData.allowedDomains !== undefined
+              ? accountData.allowedDomains
+              : account.allowedDomains && account.allowedDomains.length > 0
+              ? account.allowedDomains
+              : accountData.isShared || account.isShared
+              ? ['patterns247.net']
+              : [],
           displayName: accountData.displayName || account.displayName,
           lastSyncedAt: new Date(),
           isActive: true,
@@ -964,6 +997,92 @@ export class MailService {
     return { success: true, message: 'Email account disconnected successfully' };
   }
 
+  // Update allowed domain filters for a Shared Group Mailbox (Restricted to Workspace Admins and Owners)
+  async updateAllowedDomains(userId: string, accountId: string, allowedDomains: string[]) {
+    const { account, isAdmin } = await this.validateAccountAccess(userId, accountId);
+
+    let canManage = isAdmin;
+    if (!canManage && (account.workspaceId || account.channelId)) {
+      canManage = await this.verifyAdminOrOwnerRole(userId, account.workspaceId, account.channelId);
+    }
+
+    if (!canManage) {
+      throw new ForbiddenException(
+        'Only Workspace Admins and Owners can manage Group Mailbox domain filters.'
+      );
+    }
+
+    if (!account.isShared) {
+      throw new BadRequestException('Allowed domain filters are only applicable to Shared Group Mailboxes.');
+    }
+
+    const cleanedDomains = Array.from(
+      new Set(
+        (allowedDomains || [])
+          .map((d) => d.trim().toLowerCase().replace(/^@/, ''))
+          .filter(Boolean),
+      ),
+    );
+
+    const updated = await this.prisma.emailAccount.update({
+      where: { id: accountId },
+      data: {
+        allowedDomains: cleanedDomains,
+      },
+      select: {
+        id: true,
+        emailAddress: true,
+        isShared: true,
+        allowedDomains: true,
+      },
+    });
+
+    // Trigger sync in background to fetch emails for newly added domains
+    this.syncAccount(userId, accountId).catch((err) => {
+      console.warn(`Background sync after allowed domains update failed: ${err.message}`);
+    });
+
+    return {
+      success: true,
+      account: updated,
+      message: 'Group mailbox allowed domains updated successfully',
+    };
+  }
+
+  // Check whether an email matches allowed domains for shared group mailboxes
+  isEmailAllowed(
+    fromAddress: string,
+    toAddresses: string[] = [],
+    allowedDomains: string[] = [],
+  ): boolean {
+    if (!allowedDomains || allowedDomains.length === 0) {
+      return true; // No restriction
+    }
+
+    const cleanDomains = allowedDomains
+      .map((d) => d.trim().toLowerCase().replace(/^@/, ''))
+      .filter(Boolean);
+
+    if (cleanDomains.length === 0) return true;
+
+    const matchesDomain = (addr: string) => {
+      if (!addr) return false;
+      const lower = addr.trim().toLowerCase();
+      return cleanDomains.some((dom) => {
+        return (
+          lower === dom ||
+          lower.endsWith(`@${dom}`) ||
+          lower.includes(`@${dom}`)
+        );
+      });
+    };
+
+    if (matchesDomain(fromAddress)) return true;
+    if (toAddresses && toAddresses.some((addr) => matchesDomain(addr))) return true;
+
+    return false;
+  }
+
   // Fetch messages with filters, folders, search, pagination, and Handled/Done status
   async getMessages(
     userId: string,
@@ -978,10 +1097,12 @@ export class MailService {
     },
   ) {
     let accountIds: string[] = [];
+    let targetAccount: any = null;
 
     if (query.accountId) {
-      await this.validateAccountAccess(userId, query.accountId);
+      const { account } = await this.validateAccountAccess(userId, query.accountId);
       accountIds = [query.accountId];
+      targetAccount = account;
     } else {
       const accessibleAccounts = await this.getAccounts(userId, query.workspaceId);
       accountIds = accessibleAccounts.map((a) => a.id);
@@ -999,6 +1120,24 @@ export class MailService {
     const where: any = {
       accountId: { in: accountIds },
     };
+
+    // If shared group mailbox, filter messages to only show allowed domains
+    if (targetAccount?.isShared && targetAccount.allowedDomains && targetAccount.allowedDomains.length > 0) {
+      const cleanList = targetAccount.allowedDomains
+        .map((d: string) => d.replace(/^@/, '').trim().toLowerCase())
+        .filter(Boolean);
+      if (cleanList.length > 0) {
+        where.AND = [
+          ...(where.AND || []),
+          {
+            OR: cleanList.flatMap((d: string) => [
+              { fromAddress: { endsWith: `@${d}`, mode: 'insensitive' } },
+              { fromAddress: { contains: `@${d}`, mode: 'insensitive' } },
+            ]),
+          },
+        ];
+      }
+    }
 
     if (folder === EmailFolder.STARRED) {
       where.isStarred = true;
@@ -2027,9 +2166,18 @@ export class MailService {
     }
 
     try {
-      // Fetch latest 100 message IDs from Gmail so all emails are visible
+      // Fetch latest 100 message IDs from Gmail (filtered by allowed domains if shared group mailbox)
+      let listUrl = 'https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=100';
+      if (account.isShared && account.allowedDomains && account.allowedDomains.length > 0) {
+        const cleanList = account.allowedDomains.map((d: string) => d.replace(/^@/, '').trim()).filter(Boolean);
+        if (cleanList.length > 0) {
+          const qStr = cleanList.map((d: string) => `from:(*@${d}) OR to:(*@${d})`).join(' OR ');
+          listUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=100&q=${encodeURIComponent(qStr)}`;
+        }
+      }
+
       const listRes = await fetch(
-        'https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=100',
+        listUrl,
         {
           headers: { Authorization: `Bearer ${accessToken}` },
         },
@@ -2187,6 +2335,11 @@ export class MailService {
               // Extract all files, documents, and media attachments
               const rawAttachments = this.extractGmailAttachments(msgData.payload);
               const hasAttachments = rawAttachments.length > 0;
+
+              // If group mailbox: double-check that this email matches allowed domains before storing in DB
+              if (account.isShared && !this.isEmailAllowed(fromAddress, toAddresses, account.allowedDomains)) {
+                return;
+              }
 
               const existing = await this.prisma.emailMessage.findFirst({
                 where: {
@@ -2387,6 +2540,10 @@ export class MailService {
         const bodyHtml = msg.body?.content || snippet;
         const bodyText = snippet;
 
+        if (account.isShared && !this.isEmailAllowed(fromAddress, toAddresses, account.allowedDomains)) {
+          continue;
+        }
+
         if (existing) {
           await this.prisma.emailMessage.update({
             where: { id: existing.id },
@@ -2513,6 +2670,10 @@ export class MailService {
               .flatMap((c: any) => c.value?.map((v: any) => v.address) || [])
               .filter(Boolean);
 
+            if (account.isShared && !this.isEmailAllowed(fromAddr, toAddrs, account.allowedDomains)) {
+              continue;
+            }
+
             const attachmentsList: Array<{ fileName: string; fileUrl: string; fileSize: number; contentType: string }> = [];
             if (parsed.attachments && parsed.attachments.length > 0) {
               const uploadsDir = join(process.cwd(), 'uploads');
@@ -2616,6 +2777,10 @@ export class MailService {
                 const ccAddrs = (parsed.cc ? (Array.isArray(parsed.cc) ? parsed.cc : [parsed.cc]) : [])
                   .flatMap((c: any) => c.value?.map((v: any) => v.address) || [])
                   .filter(Boolean);
+
+                if (account.isShared && !this.isEmailAllowed(fromAddr, toAddrs, account.allowedDomains)) {
+                  continue;
+                }
 
                 const attachmentsList: Array<{ fileName: string; fileUrl: string; fileSize: number; contentType: string }> = [];
                 if (parsed.attachments && parsed.attachments.length > 0) {

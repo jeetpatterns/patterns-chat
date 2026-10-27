@@ -149,6 +149,7 @@ export interface EmailAccountItem {
   avatarUrl?: string;
   isActive: boolean;
   isShared?: boolean;
+  allowedDomains?: string[];
   channelId?: string | null;
   channelName?: string | null;
   workspaceId?: string | null;
@@ -934,6 +935,88 @@ function WorkspaceShellContent() {
   const [mailDateEnd, setMailDateEnd] = useState('');
   const [showMailDatePopover, setShowMailDatePopover] = useState(false);
   const mailDatePopoverRef = useRef<HTMLDivElement | null>(null);
+
+  // Group Mailbox Domain Filtering States (Admins & Owners only)
+  const [showDomainFilterModal, setShowDomainFilterModal] = useState(false);
+  const [domainFilterAccount, setDomainFilterAccount] = useState<EmailAccountItem | null>(null);
+  const [modalAllowedDomains, setModalAllowedDomains] = useState<string[]>(['patterns247.net']);
+  const [newDomainInput, setNewDomainInput] = useState('');
+  const [isSavingAllowedDomains, setIsSavingAllowedDomains] = useState(false);
+
+  function handleOpenDomainFilterModal(acc: EmailAccountItem) {
+    if (!canManageGroupMail) return;
+    setDomainFilterAccount(acc);
+    setModalAllowedDomains(
+      acc.allowedDomains && acc.allowedDomains.length > 0
+        ? [...acc.allowedDomains]
+        : ['patterns247.net']
+    );
+    setNewDomainInput('');
+    setShowDomainFilterModal(true);
+  }
+
+  function handleAddModalDomain(domainToAdd?: string) {
+    const raw = (domainToAdd || newDomainInput).trim().toLowerCase();
+    if (!raw) return;
+    const clean = raw.replace(/^@/, '').trim();
+    if (!clean) return;
+    if (!modalAllowedDomains.includes(clean)) {
+      setModalAllowedDomains((prev) => [...prev, clean]);
+    }
+    setNewDomainInput('');
+  }
+
+  function handleRemoveModalDomain(domainToRemove: string) {
+    setModalAllowedDomains((prev) => prev.filter((d) => d !== domainToRemove));
+  }
+
+  async function handleSaveAllowedDomains() {
+    if (!domainFilterAccount || !token) return;
+    try {
+      setIsSavingAllowedDomains(true);
+      const res = await fetch(`${API_URL}/mail/accounts/${domainFilterAccount.id}/allowed-domains`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          allowedDomains: modalAllowedDomains,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const updatedDomains = data.account?.allowedDomains || modalAllowedDomains;
+
+        // Update local accounts state
+        setMailAccounts((prev) =>
+          prev.map((acc) =>
+            acc.id === domainFilterAccount.id
+              ? { ...acc, allowedDomains: updatedDomains }
+              : acc
+          )
+        );
+
+        if (selectedMailAccountId === domainFilterAccount.id) {
+          loadMailMessages(domainFilterAccount.id, mailFolder, mailSearchQuery);
+          handleSyncMailAccount(domainFilterAccount.id, true);
+        }
+
+        setShowDomainFilterModal(false);
+        setCallNotificationMsg('Group mailbox domain filters updated & live syncing matching emails.');
+        setTimeout(() => setCallNotificationMsg(null), 4000);
+      } else {
+        const errData = await res.json().catch(() => null);
+        alert(errData?.message || 'Failed to update allowed domain filters.');
+      }
+    } catch (err) {
+      console.error('Failed to update allowed domains:', err);
+      alert('Network error while updating allowed domains.');
+    } finally {
+      setIsSavingAllowedDomains(false);
+    }
+  }
   const [inlineReplyText, setInlineReplyText] = useState('');
   const [showEmailDetailsModal, setShowEmailDetailsModal] = useState(false);
   const [isReplyingInline, setIsReplyingInline] = useState(false);
@@ -6937,7 +7020,18 @@ function WorkspaceShellContent() {
                                     </span>
                                   )}
                                 </div>
-                                <p className="truncate text-[10px] text-slate-400 font-mono leading-tight">{acc.emailAddress}</p>
+                                <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
+                                  <p className="truncate text-[10px] text-slate-400 font-mono leading-tight">{acc.emailAddress}</p>
+                                  {acc.allowedDomains && acc.allowedDomains.length > 0 && (
+                                    <span
+                                      className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded bg-indigo-50 border border-indigo-200/80 text-[8px] font-bold text-indigo-700 shrink-0"
+                                      title={`Allowed client domains: ${acc.allowedDomains.map(d => '@' + d.replace(/^@/, '')).join(', ')}`}
+                                    >
+                                      <Shield className="w-2.5 h-2.5 text-indigo-600" />
+                                      <span>@{acc.allowedDomains[0].replace(/^@/, '')}{acc.allowedDomains.length > 1 ? ` +${acc.allowedDomains.length - 1}` : ''}</span>
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                             </div>
                             <div className="flex items-center gap-1 shrink-0">
@@ -6950,6 +7044,19 @@ function WorkspaceShellContent() {
                                 <span className="px-1.5 py-0.5 rounded-full bg-indigo-600 text-white text-[8px] font-bold shadow-2xs">
                                   {acc.unreadCount}
                                 </span>
+                              )}
+                              {canManageGroupMail && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleOpenDomainFilterModal(acc);
+                                  }}
+                                  className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all cursor-pointer"
+                                  title="Allowed Domains (Filter Client Mails)"
+                                >
+                                  <Settings className="h-3 w-3" />
+                                </button>
                               )}
                               {canManageGroupMail && (
                                 <button
@@ -7717,9 +7824,43 @@ function WorkspaceShellContent() {
                           </span>
                         )}
                       </div>
-                      <span className="text-[10px] text-slate-400 font-medium truncate">
-                        {selectedMailAccount?.emailAddress || 'Connected Mailbox'}
-                      </span>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-[10px] text-slate-400 font-medium truncate">
+                          {selectedMailAccount?.emailAddress || 'Connected Mailbox'}
+                        </span>
+                        {selectedMailAccount?.isShared && (
+                          <div className="flex items-center gap-1 shrink-0">
+                            {canManageGroupMail ? (
+                              <button
+                                type="button"
+                                onClick={() => handleOpenDomainFilterModal(selectedMailAccount)}
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 text-[10px] font-bold transition-all shadow-2xs cursor-pointer active:scale-95"
+                                title="Click to manage allowed client domains for this group inbox"
+                              >
+                                <Shield className="w-2.5 h-2.5 text-indigo-600" />
+                                <span>
+                                  Domain: {selectedMailAccount.allowedDomains && selectedMailAccount.allowedDomains.length > 0
+                                    ? `@${selectedMailAccount.allowedDomains[0].replace(/^@/, '')}${selectedMailAccount.allowedDomains.length > 1 ? ` (+${selectedMailAccount.allowedDomains.length - 1})` : ''}`
+                                    : 'All Domains'}
+                                </span>
+                                <Settings className="w-2.5 h-2.5 text-indigo-400 ml-0.5" />
+                              </button>
+                            ) : (
+                              <span
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-semibold"
+                                title={`Synced client domains: ${selectedMailAccount.allowedDomains?.map((d) => '@' + d.replace(/^@/, '')).join(', ') || 'All'}`}
+                              >
+                                <Shield className="w-2.5 h-2.5 text-slate-400" />
+                                <span>
+                                  Domain: {selectedMailAccount.allowedDomains && selectedMailAccount.allowedDomains.length > 0
+                                    ? `@${selectedMailAccount.allowedDomains[0].replace(/^@/, '')}${selectedMailAccount.allowedDomains.length > 1 ? ` (+${selectedMailAccount.allowedDomains.length - 1})` : ''}`
+                                    : 'All'}
+                                </span>
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -13556,6 +13697,204 @@ function WorkspaceShellContent() {
             </div>
           </div>
         )}
+
+      {/* ───────────────────────────────────────────────────────────── */}
+      {/* GROUP MAILBOX ALLOWED DOMAINS MODAL (Admins & Owners Only) */}
+      {/* ───────────────────────────────────────────────────────────── */}
+      {showDomainFilterModal && domainFilterAccount && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]">
+            {/* Header */}
+            <div className="p-5 sm:p-6 border-b border-slate-100 flex items-start justify-between bg-gradient-to-r from-indigo-50/60 via-purple-50/40 to-white shrink-0">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-600 flex items-center justify-center text-white shadow-md shadow-indigo-200 shrink-0">
+                  <ShieldCheck className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-base font-black text-slate-900 tracking-tight flex items-center gap-2">
+                    <span>Group Mailbox Domain Filter</span>
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium truncate">
+                    #{domainFilterAccount.channelName || 'group'} • {domainFilterAccount.emailAddress}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDomainFilterModal(false)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 sm:p-6 space-y-5 overflow-y-auto">
+              {/* Privacy Notice Banner */}
+              <div className="p-3.5 rounded-2xl bg-amber-50/80 border border-amber-200/80 text-amber-900 shadow-2xs space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <Lock className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                  <span className="text-xs font-black text-amber-950">
+                    Privacy & Client Communication Safeguard
+                  </span>
+                </div>
+                <p className="text-[11px] text-amber-800 leading-relaxed font-medium">
+                  When linking an email account for client orders, multiple group members have access. To guarantee that personal emails, bank statements, or unrelated messages are <strong>never exposed or synced</strong>, only emails from the allowed domains below will sync and be visible in this group mailbox.
+                </p>
+              </div>
+
+              {/* Current Allowed Domains */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                    <span>Allowed Client / Company Domains</span>
+                    <span className="px-1.5 py-0.2 rounded-full bg-indigo-100 text-indigo-700 text-[10px]">
+                      {modalAllowedDomains.length}
+                    </span>
+                  </label>
+                  {modalAllowedDomains.length > 0 && (
+                    <span className="text-[10px] text-slate-400 font-medium">
+                      Click ✕ to remove
+                    </span>
+                  )}
+                </div>
+
+                {modalAllowedDomains.length === 0 ? (
+                  <div className="p-4 rounded-2xl border-2 border-dashed border-slate-200 text-center space-y-1 bg-slate-50/50">
+                    <p className="text-xs font-bold text-slate-600">No domain filters configured</p>
+                    <p className="text-[11px] text-slate-400">
+                      Add a domain like <code className="text-indigo-600 font-bold">@patterns247.net</code> below so only client emails sync into this group.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-2 p-3 rounded-2xl bg-slate-50 border border-slate-200/80 min-h-[50px] items-center">
+                    {modalAllowedDomains.map((dom) => (
+                      <span
+                        key={dom}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-indigo-200 shadow-2xs text-xs font-bold text-indigo-900 group transition-all"
+                      >
+                        <Shield className="w-3 h-3 text-indigo-600 shrink-0" />
+                        <span>@{dom}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveModalDomain(dom)}
+                          className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 p-0.5 rounded-md transition-colors cursor-pointer ml-1"
+                          title={`Remove @${dom}`}
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Add New Domain Form */}
+              <div className="space-y-2 pt-1">
+                <label className="block text-xs font-extrabold text-slate-800 uppercase tracking-wider">
+                  Add New Allowed Domain or Client Email
+                </label>
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs select-none">
+                      @
+                    </span>
+                    <input
+                      type="text"
+                      value={newDomainInput}
+                      onChange={(e) => setNewDomainInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddModalDomain();
+                        }
+                      }}
+                      placeholder="e.g. amazon.com, patterns247.net, or clientcompany.com"
+                      className="w-full pl-8 pr-3.5 py-2.5 rounded-xl bg-white border border-slate-200 text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!newDomainInput.trim()}
+                    onClick={() => handleAddModalDomain()}
+                    className="py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-bold text-xs shadow-xs transition-all flex items-center gap-1 cursor-pointer disabled:cursor-not-allowed shrink-0"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add</span>
+                  </button>
+                </div>
+
+                {/* Quick Presets */}
+                <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                  <span className="text-[10px] text-slate-400 font-medium">Quick Suggestions:</span>
+                  {[
+                    'patterns247.net',
+                    'amazon.com',
+                    'client.com',
+                  ].map((preset) => {
+                    const isAdded = modalAllowedDomains.includes(preset);
+                    return (
+                      <button
+                        key={preset}
+                        type="button"
+                        disabled={isAdded}
+                        onClick={() => handleAddModalDomain(preset)}
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border transition-all cursor-pointer ${
+                          isAdded
+                            ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                            : 'bg-indigo-50/80 text-indigo-700 border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300'
+                        }`}
+                      >
+                        {isAdded ? `✓ @${preset}` : `+ @${preset}`}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Explanatory Dynamic Notice */}
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-100 text-[11px] text-slate-500 space-y-1">
+                <p className="font-semibold text-slate-700 flex items-center gap-1">
+                  <span>⚡</span>
+                  <span>Instant Dynamic Sync & Verification</span>
+                </p>
+                <p>
+                  Saving changes will instantly update the mailbox filter. Any newly added domain (like <code>@amazon.com</code>) will automatically be queried from the mailbox and made visible to group members.
+                </p>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 sm:p-5 border-t border-slate-100 bg-slate-50/80 flex items-center justify-end gap-2.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowDomainFilterModal(false)}
+                className="py-2 px-4 rounded-xl text-slate-600 hover:bg-slate-200/70 font-bold text-xs transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isSavingAllowedDomains}
+                onClick={handleSaveAllowedDomains}
+                className="py-2 px-5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs shadow-md shadow-indigo-600/20 flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer disabled:cursor-not-allowed"
+              >
+                {isSavingAllowedDomains ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Saving & Syncing...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Save & Live Sync</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ───────────────────────────────────────────────────────────── */}
       {/* CONNECT EMAIL VIA OAUTH MODAL */}

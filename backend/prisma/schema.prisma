@@ -350,6 +350,7 @@ model EmailAccount {
   channelId      String?
   channel        Channel?      @relation(fields: [channelId], references: [id], onDelete: SetNull)
   isShared       Boolean       @default(false)
+  allowedDomains String[]      @default(["patterns247.net"])
   provider       EmailProvider @default(GOOGLE)
   emailAddress   String
   displayName    String?

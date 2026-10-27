@@ -110,6 +110,15 @@ export class MailController {
     return this.mailService.syncAccount(user.id, id);
   }
 
+  @Patch('accounts/:id/allowed-domains')
+  async updateAllowedDomains(
+    @CurrentUser() user: { id: string },
+    @Param('id') id: string,
+    @Body() body: { allowedDomains: string[] },
+  ) {
+    return this.mailService.updateAllowedDomains(user.id, id, body.allowedDomains);
+  }
+
   @Get('messages')
   async getMessages(
     @CurrentUser() user: { id: string },
