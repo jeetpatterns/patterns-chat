@@ -22,7 +22,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     @Inject(forwardRef(() => MessagesGateway))
     private readonly messagesGateway: MessagesGateway,
-  ) {}
+  ) { }
 
   async register(dto: RegisterDto) {
     const existing = await this.prisma.user.findUnique({
@@ -371,57 +371,57 @@ export class AuthService {
             },
           });
 
-        const sampleEmails = [
-          {
-            externalMessageId: `msg_${Math.random().toString(36).substring(2, 9)}`,
-            folder: 'INBOX' as any,
-            fromName: 'Google Cloud Platform',
-            fromAddress: 'cloud-noreply@google.com',
-            toAddresses: [email],
-            subject: 'Welcome to Google Cloud & Patterns Communication OAuth Service',
-            snippet: 'Your OAuth integration has been verified. You can now synchronize messages securely across Patterns...',
-            bodyHtml: `<p><strong>Google Cloud OAuth Authorization Verified</strong></p><p>Hello,</p><p>Your email account <strong>${email}</strong> was successfully connected to <strong>Patterns Communication</strong> via Google OAuth 2.0.</p>`,
-            receivedAt: new Date(),
-            isRead: true,
-            isStarred: true,
-          },
-          {
-            externalMessageId: `msg_${Math.random().toString(36).substring(2, 9)}`,
-            folder: 'INBOX' as any,
-            fromName: 'Sarah Jenkins',
-            fromAddress: 'sarah.jenkins@patterns.com',
-            toAddresses: [email],
-            subject: 'Q4 Product Roadmap & Sprint Deliverables Review',
-            snippet: 'Hi team, please find attached the reviewed sprint goals and client deliverables for next week...',
-            bodyHtml: `<p>Hi team,</p><p>Please find attached the reviewed sprint goals and client deliverables for next week. Let me know if any adjustments are needed.</p>`,
-            receivedAt: new Date(Date.now() - 3600000 * 3),
-            isRead: false,
-          },
-          {
-            externalMessageId: `msg_${Math.random().toString(36).substring(2, 9)}`,
-            folder: 'INBOX' as any,
-            fromName: 'David Chen',
-            fromAddress: 'david.chen@enterprise.io',
-            toAddresses: [email],
-            subject: 'Contract Signed & Kickoff Scheduling',
-            snippet: 'Hey! We just completed signing the enterprise agreement. When can we schedule the technical kickoff?',
-            bodyHtml: `<p>Hey!</p><p>We just completed signing the enterprise agreement. When can we schedule the technical kickoff?</p>`,
-            receivedAt: new Date(Date.now() - 3600000 * 10),
-            isRead: true,
-          },
-        ];
-
-        for (const sample of sampleEmails) {
-          await this.prisma.emailMessage.create({
-            data: {
-              accountId: emailAccount.id,
-              ...sample,
+          const sampleEmails = [
+            {
+              externalMessageId: `msg_${Math.random().toString(36).substring(2, 9)}`,
+              folder: 'INBOX' as any,
+              fromName: 'Google Cloud Platform',
+              fromAddress: 'cloud-noreply@google.com',
+              toAddresses: [email],
+              subject: 'Welcome to Google Cloud & Patterns Communication OAuth Service',
+              snippet: 'Your OAuth integration has been verified. You can now synchronize messages securely across Patterns...',
+              bodyHtml: `<p><strong>Google Cloud OAuth Authorization Verified</strong></p><p>Hello,</p><p>Your email account <strong>${email}</strong> was successfully connected to <strong>Patterns Communication</strong> via Google OAuth 2.0.</p>`,
+              receivedAt: new Date(),
+              isRead: true,
+              isStarred: true,
             },
-          });
+            {
+              externalMessageId: `msg_${Math.random().toString(36).substring(2, 9)}`,
+              folder: 'INBOX' as any,
+              fromName: 'Sarah Jenkins',
+              fromAddress: 'sarah.jenkins@patterns.com',
+              toAddresses: [email],
+              subject: 'Q4 Product Roadmap & Sprint Deliverables Review',
+              snippet: 'Hi team, please find attached the reviewed sprint goals and client deliverables for next week...',
+              bodyHtml: `<p>Hi team,</p><p>Please find attached the reviewed sprint goals and client deliverables for next week. Let me know if any adjustments are needed.</p>`,
+              receivedAt: new Date(Date.now() - 3600000 * 3),
+              isRead: false,
+            },
+            {
+              externalMessageId: `msg_${Math.random().toString(36).substring(2, 9)}`,
+              folder: 'INBOX' as any,
+              fromName: 'David Chen',
+              fromAddress: 'david.chen@enterprise.io',
+              toAddresses: [email],
+              subject: 'Contract Signed & Kickoff Scheduling',
+              snippet: 'Hey! We just completed signing the enterprise agreement. When can we schedule the technical kickoff?',
+              bodyHtml: `<p>Hey!</p><p>We just completed signing the enterprise agreement. When can we schedule the technical kickoff?</p>`,
+              receivedAt: new Date(Date.now() - 3600000 * 10),
+              isRead: true,
+            },
+          ];
+
+          for (const sample of sampleEmails) {
+            await this.prisma.emailMessage.create({
+              data: {
+                accountId: emailAccount.id,
+                ...sample,
+              },
+            });
+          }
         }
       }
-    }
-  } catch (e) {
+    } catch (e) {
       console.warn('Auto EmailAccount setup warning:', e);
     }
 
@@ -522,7 +522,7 @@ export class AuthService {
       if (this.messagesGateway) {
         this.messagesGateway.emitForceLogout(user.id, sessionId);
       }
-    } catch (e) {}
+    } catch (e) { }
 
     const accessToken = this.jwtService.sign({
       sub: user.id,

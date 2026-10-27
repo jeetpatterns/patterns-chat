@@ -18,6 +18,7 @@ import { existsSync, mkdirSync, promises as fsPromises } from 'fs';
 @Injectable()
 export class MailService {
   private accountReauthNeeded = new Map<string, boolean>();
+  private googleTokenExpiry = new Map<string, number>();
 
   // Injected Prisma Service and Messages Gateway
   constructor(
@@ -257,7 +258,10 @@ export class MailService {
         ownerId: acc.userId,
         ownerName: acc.user?.name || 'Team Member',
         isOwner: acc.userId === userId,
-        requiresReauth: !acc.refreshToken || !!this.accountReauthNeeded.get(acc.id),
+        requiresReauth:
+          acc.provider === EmailProvider.GOOGLE || acc.provider === EmailProvider.MICROSOFT
+            ? (!acc.refreshToken || !!this.accountReauthNeeded.get(acc.id))
+            : false,
         unreadCount: inboxUnread,
         unhandledCount,
         handledCount,
@@ -279,7 +283,6 @@ export class MailService {
     const redirect = redirectUri || `${process.env.FRONTEND_URL || 'http://localhost:3000'}/auth/callback?provider=google`;
     const scopes = [
       'https://www.googleapis.com/auth/gmail.modify',
-      'https://www.googleapis.com/auth/gmail.readonly',
       'https://www.googleapis.com/auth/gmail.send',
       'https://www.googleapis.com/auth/userinfo.profile',
       'https://www.googleapis.com/auth/userinfo.email',
@@ -288,11 +291,19 @@ export class MailService {
 
     const state = 'connect_mail';
 
+    // Check if user already has an active refresh token
+    const existing = await this.prisma.emailAccount.findFirst({
+      where: { userId, provider: EmailProvider.GOOGLE, refreshToken: { not: null } },
+    });
+
+    // If already authorized before, prompt=select_account enables smooth 1-click connect without security alerts
+    const promptParam = existing ? 'select_account' : 'consent select_account';
+
     const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(
       clientId,
     )}&redirect_uri=${encodeURIComponent(redirect)}&response_type=code&scope=${encodeURIComponent(
       scopes,
-    )}&access_type=offline&prompt=consent&state=${encodeURIComponent(state)}`;
+    )}&access_type=offline&prompt=${encodeURIComponent(promptParam)}&include_granted_scopes=true&state=${encodeURIComponent(state)}`;
 
     return { authUrl, url: authUrl, clientIdConfigured: !!process.env.GOOGLE_CLIENT_ID };
   }
@@ -1673,21 +1684,18 @@ export class MailService {
 
   // Helper to ensure valid Google access token by refreshing if needed
   private async getValidGoogleAccessToken(account: { id: string; accessToken: string | null; refreshToken: string | null }): Promise<string | null> {
-    if (!account.accessToken && !account.refreshToken) return null;
-    let token = account.accessToken;
-
-    if (token) {
-      try {
-        const testRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (testRes.ok) {
-          return token;
-        }
-      } catch (e) {}
+    if (!account.accessToken && !account.refreshToken) {
+      this.accountReauthNeeded.set(account.id, true);
+      return null;
     }
 
-    // Token expired or invalid, refresh using refreshToken if available
+    const expiry = this.googleTokenExpiry.get(account.id) || 0;
+    // If token exists and hasn't expired (with 2 min buffer), reuse directly (0 quota cost!)
+    if (account.accessToken && Date.now() < expiry) {
+      return account.accessToken;
+    }
+
+    // Refresh using refreshToken if available
     if (account.refreshToken && process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
       try {
         const refreshRes = await fetch('https://oauth2.googleapis.com/token', {
@@ -1702,19 +1710,33 @@ export class MailService {
         });
         const refreshData = await refreshRes.json();
         if (refreshData.access_token) {
-          token = refreshData.access_token;
+          const newToken = refreshData.access_token;
+          const expiresInSec = typeof refreshData.expires_in === 'number' ? refreshData.expires_in : 3599;
+          this.googleTokenExpiry.set(account.id, Date.now() + (expiresInSec - 120) * 1000);
+          this.accountReauthNeeded.delete(account.id);
+
           await this.prisma.emailAccount.update({
             where: { id: account.id },
-            data: { accessToken: token },
+            data: { accessToken: newToken },
           });
-          return token;
+          return newToken;
+        } else if (refreshData.error === 'invalid_grant') {
+          console.error(`Google refresh token revoked for account ${account.id}:`, refreshData);
+          this.accountReauthNeeded.set(account.id, true);
+          return null;
         }
       } catch (err) {
         console.error('Failed to refresh Google access token:', err);
       }
     }
 
-    return token;
+    // Fallback: If no expiry was set yet but accessToken exists, assume valid for now
+    if (account.accessToken) {
+      this.googleTokenExpiry.set(account.id, Date.now() + 1800 * 1000);
+      return account.accessToken;
+    }
+
+    return null;
   }
 
   // Extract HTML and Plain Text from nested Gmail payload parts
@@ -1961,11 +1983,21 @@ export class MailService {
       if (!listRes.ok) {
         const errText = await listRes.text();
         console.error(`Gmail API list messages failed (${listRes.status}):`, errText);
-        const requiresReauth = listRes.status === 403 || listRes.status === 401;
-        if (requiresReauth) {
-          this.accountReauthNeeded.set(account.id, true);
+
+        const isRateLimit = listRes.status === 429 || errText.includes('rateLimitExceeded') || errText.includes('RATE_LIMIT_EXCEEDED') || errText.includes('Quota exceeded');
+        const isAuthRevoked = listRes.status === 401 || (listRes.status === 403 && (errText.includes('insufficientPermissions') || errText.includes('ACCESS_TOKEN_SCOPE_INSUFFICIENT')));
+
+        if (isRateLimit) {
+          console.warn(`Gmail API rate limited for ${account.emailAddress}. Backing off, NOT requiring reauth.`);
+          return { syncedCount: 0, requiresReauth: false, error: 'RATE_LIMIT' };
         }
-        return { syncedCount: 0, requiresReauth, error: errText };
+
+        if (isAuthRevoked && !account.refreshToken) {
+          this.accountReauthNeeded.set(account.id, true);
+          return { syncedCount: 0, requiresReauth: true, error: errText };
+        }
+
+        return { syncedCount: 0, requiresReauth: false, error: errText };
       }
 
       this.accountReauthNeeded.delete(account.id);
@@ -1982,7 +2014,7 @@ export class MailService {
         if (sentRes.ok) {
           const sentData = await sentRes.json();
           const sentRefs: Array<{ id: string; threadId: string }> = sentData.messages || [];
-          const existingIds = new Set(messageRefs.map((m) => m.id));
+          const existingIds = new Set(messageRefs.map((m: any) => m.id));
           for (const sRef of sentRefs) {
             if (!existingIds.has(sRef.id)) {
               messageRefs.push(sRef);
@@ -1998,12 +2030,33 @@ export class MailService {
         return { syncedCount: 0 };
       }
 
+      // Check which message IDs already exist in the database to prevent duplicate full-payload quota usage
+      const existingList = await this.prisma.emailMessage.findMany({
+        where: {
+          accountId: account.id,
+          externalMessageId: { in: messageRefs.map((m) => m.id) },
+        },
+        select: { externalMessageId: true },
+      });
+      const existingSet = new Set(existingList.map((m: any) => m.externalMessageId));
+      const newRefs = messageRefs.filter((m: any) => !existingSet.has(m.id));
+
+      // If all messages already exist in database, update lastSyncedAt and return without burning quota
+      if (newRefs.length === 0) {
+        await this.prisma.emailAccount.update({
+          where: { id: account.id },
+          data: { lastSyncedAt: new Date() },
+        });
+        return { syncedCount: 0, requiresReauth: false };
+      }
+
       let syncedCount = 0;
 
-      // Fetch message details in concurrent batches
-      const batchSize = 6;
-      for (let i = 0; i < messageRefs.length; i += batchSize) {
-        const batch = messageRefs.slice(i, i + batchSize);
+      // Fetch message details only for NEW messages in small batches (capped at 25 to stay within limits)
+      const toFetch = newRefs.slice(0, 25);
+      const batchSize = 4;
+      for (let i = 0; i < toFetch.length; i += batchSize) {
+        const batch = toFetch.slice(i, i + batchSize);
         await Promise.all(
           batch.map(async (msgRef) => {
             try {

@@ -14,16 +14,13 @@ import {
   Mail,
   Lock,
   MessageSquare,
-  Video,
-  FileText,
-  Calendar,
   LogIn,
   UserPlus,
   X,
-  UserCheck,
   PlusCircle,
   ShieldCheck,
   Star,
+  CheckCircle2,
 } from 'lucide-react';
 import { useAuth } from '@/lib/auth-context';
 
@@ -133,24 +130,27 @@ export default function RegisterPage() {
   }
 
   return (
-    <div className="h-screen max-h-screen w-full bg-[#F8FAFD] bg-[radial-gradient(#E2E8F0_1px,transparent_1px)] [background-size:24px_24px] flex flex-col justify-between relative overflow-hidden select-none selection:bg-indigo-500 selection:text-white">
+    <div className="h-screen max-h-screen w-full bg-[#F8FAFC] bg-[radial-gradient(#E2E8F0_1px,transparent_1px)] [background-size:24px_24px] flex flex-col justify-between relative overflow-hidden select-none selection:bg-indigo-500 selection:text-white antialiased">
       {/* Ambient Blurred Glow Shapes */}
-      <div className="absolute -top-32 -right-32 w-[550px] h-[550px] rounded-full bg-gradient-to-br from-indigo-200/40 via-purple-200/25 to-transparent blur-3xl pointer-events-none" />
-      <div className="absolute -bottom-32 -left-32 w-[550px] h-[550px] rounded-full bg-gradient-to-tr from-blue-200/40 via-indigo-200/25 to-transparent blur-3xl pointer-events-none" />
+      <div className="absolute -top-32 -right-32 w-[500px] h-[500px] rounded-full bg-gradient-to-br from-indigo-200/40 via-purple-200/20 to-transparent blur-3xl pointer-events-none" />
+      <div className="absolute -bottom-32 -left-32 w-[500px] h-[500px] rounded-full bg-gradient-to-tr from-blue-200/40 via-indigo-200/20 to-transparent blur-3xl pointer-events-none" />
 
       {/* ─────────────────────────────────────────────────────────────
-          TOP HEADER
+          TOP BRAND HEADER (Fixed, Non-Sticky, Single Screen Fit)
       ───────────────────────────────────────────────────────────── */}
-      <header className="w-full max-w-7xl mx-auto px-6 sm:px-8 lg:px-12 py-2 sm:py-2.5 flex items-center justify-between z-20 shrink-0">
-        <Link href="/" className="flex items-center gap-2.5 group">
+      <header className="w-full border-b border-slate-200/90 bg-white/90 backdrop-blur-md shrink-0 relative z-20 shadow-2xs">
+        <div className="w-full max-w-7xl mx-auto px-4 sm:px-8 lg:px-12 h-14 sm:h-15 flex items-center justify-between">
+        <Link href="/" className="flex items-center gap-2 group">
           <img
             src="/patterns-icon.png?v=2"
             alt="Patterns Chat"
-            className="h-7.5 w-auto object-contain transition-transform group-hover:scale-105"
+            className="h-7 sm:h-8 w-auto object-contain transition-transform group-hover:scale-105 drop-shadow-2xs"
           />
-          <div className="flex items-center gap-1 font-black text-xl tracking-tight text-slate-900">
+          <div className="flex items-center gap-1 font-black text-lg sm:text-xl tracking-tight text-slate-900">
             <span>Patterns</span>
-            <span className="text-indigo-600">Chat</span>
+            <span className="bg-gradient-to-r from-indigo-600 via-indigo-600 to-violet-600 bg-clip-text text-transparent font-black">
+              Chat
+            </span>
           </div>
         </Link>
 
@@ -160,121 +160,131 @@ export default function RegisterPage() {
           </span>
           <Link
             href="/login"
-            className="px-3.5 py-1.5 rounded-xl border border-indigo-200/90 hover:border-indigo-300 bg-white hover:bg-indigo-50/70 text-indigo-600 font-bold text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-2xs group"
+            className="px-3 py-1.5 sm:px-3.5 sm:py-1.5 rounded-xl border border-indigo-200/90 hover:border-indigo-300 bg-white hover:bg-indigo-50/70 text-indigo-700 font-bold text-xs sm:text-sm transition-all flex items-center gap-1.5 shadow-2xs group"
           >
             <span>Sign In</span>
             <ArrowRight className="h-3.5 w-3.5 group-hover:translate-x-0.5 transition-transform" />
           </Link>
         </div>
+      </div>
       </header>
 
       {/* ─────────────────────────────────────────────────────────────
-          MAIN CONTENT: 2-COLUMN BALANCED SPLIT
+          MAIN CONTENT: 2-COLUMN BALANCED SPLIT (Zero Page Scroll)
       ───────────────────────────────────────────────────────────── */}
-      <main className="max-w-7xl mx-auto px-6 sm:px-8 lg:px-12 flex-1 flex items-center justify-center w-full z-20 min-h-0 py-1">
-        <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 xl:gap-14 items-center">
-          {/* ── LEFT COLUMN: Brand Story & Features ─────────────────── */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-8 lg:px-12 flex-1 min-h-0 flex items-center justify-center w-full relative z-10 py-1 sm:py-2">
+        <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 xl:gap-14 items-center">
+          
+          {/* ── LEFT COLUMN: Brand Story & Dual Platform Pillars ────────── */}
           <div className="hidden lg:flex lg:col-span-6 xl:col-span-7 flex-col justify-center pr-2">
             {/* Pill Badge */}
-            <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-indigo-50/90 border border-indigo-200/80 text-indigo-600 text-xs font-bold mb-2 self-start shadow-2xs">
+            <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-gradient-to-r from-indigo-50 to-violet-50 border border-indigo-200/80 text-indigo-700 text-xs font-bold mb-2 self-start shadow-2xs">
               <Sparkles className="h-3.5 w-3.5 text-indigo-600" />
-              <span>Get Started in 30 Seconds</span>
+              <span>Get Started with Patterns Chat</span>
             </div>
 
             {/* Headline */}
-            <h1 className="text-2xl lg:text-[34px] xl:text-[40px] font-black tracking-tight text-slate-900 leading-[1.14]">
+            <h1 className="text-2xl lg:text-[34px] xl:text-[40px] font-black tracking-tight text-slate-900 leading-[1.12]">
               Join Your Team on
-              <span className="block text-indigo-600 mt-0.5">Patterns Chat.</span>
+              <span className="block bg-gradient-to-r from-indigo-600 via-indigo-600 to-violet-600 bg-clip-text text-transparent mt-0.5">
+                Patterns Chat.
+              </span>
             </h1>
 
             {/* Subtitle */}
             <p className="mt-1.5 text-xs sm:text-sm text-slate-600 font-normal leading-relaxed max-w-lg">
-              Fast, intelligent, enterprise-grade team messaging, high-definition video calls, and instant collaboration.
+              Create your account in 30 seconds to collaborate in real-time channels, join high-definition video syncs, and manage your customer emails together.
             </p>
 
-            {/* 4 Feature Items */}
-            <div className="mt-3 grid grid-cols-2 gap-2 max-w-xl">
-              <div className="flex items-start gap-2.5 p-2 rounded-2xl bg-white/70 border border-slate-200/70 shadow-2xs backdrop-blur-xs">
-                <div className="h-7.5 w-7.5 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0 border border-indigo-100 shadow-2xs">
-                  <MessageSquare className="h-3.5 w-3.5" />
+            {/* Dual Module Showcase Cards */}
+            <div className="mt-3.5 space-y-2.5 max-w-xl">
+              {/* Pillar 1: Team Chat */}
+              <div className="p-2.5 sm:p-3 rounded-2xl bg-white/80 border border-slate-200/80 shadow-xs backdrop-blur-xs flex items-start gap-3 hover:border-indigo-200 transition-colors">
+                <div className="h-8.5 w-8.5 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 shrink-0 shadow-2xs">
+                  <MessageSquare className="h-4 w-4" />
                 </div>
-                <div>
-                  <h3 className="text-xs font-bold text-slate-900 leading-tight">Team Messaging</h3>
-                  <p className="text-[11px] text-slate-500 font-medium mt-0.5">Real-time chat & reactions</p>
-                </div>
-              </div>
-
-              <div className="flex items-start gap-2.5 p-2 rounded-2xl bg-white/70 border border-slate-200/70 shadow-2xs backdrop-blur-xs">
-                <div className="h-7.5 w-7.5 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0 border border-indigo-100 shadow-2xs">
-                  <Video className="h-3.5 w-3.5" />
-                </div>
-                <div>
-                  <h3 className="text-xs font-bold text-slate-900 leading-tight">HD Video Calls</h3>
-                  <p className="text-[11px] text-slate-500 font-medium mt-0.5">Calls & screen sharing</p>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-extrabold text-xs sm:text-sm text-slate-900">Team Chat Module</h3>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      Real-time
+                    </span>
+                  </div>
+                  <p className="text-[11px] sm:text-xs text-slate-500 font-medium mt-0.5 leading-relaxed">
+                    Channels, direct messages, threads, emoji reactions, and live WebRTC audio/video meetings with screen sharing.
+                  </p>
                 </div>
               </div>
 
-              <div className="flex items-start gap-2.5 p-2 rounded-2xl bg-white/70 border border-slate-200/70 shadow-2xs backdrop-blur-xs">
-                <div className="h-7.5 w-7.5 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0 border border-indigo-100 shadow-2xs">
-                  <FileText className="h-3.5 w-3.5" />
+              {/* Pillar 2: Customer Mail Studio */}
+              <div className="p-2.5 sm:p-3 rounded-2xl bg-white/80 border border-slate-200/80 shadow-xs backdrop-blur-xs flex items-start gap-3 hover:border-violet-200 transition-colors">
+                <div className="h-8.5 w-8.5 rounded-xl bg-violet-50 border border-violet-100 flex items-center justify-center text-violet-600 shrink-0 shadow-2xs">
+                  <Mail className="h-4 w-4" />
                 </div>
-                <div>
-                  <h3 className="text-xs font-bold text-slate-900 leading-tight">Fast Sharing</h3>
-                  <p className="text-[11px] text-slate-500 font-medium mt-0.5">File previews & sync</p>
-                </div>
-              </div>
-
-              <div className="flex items-start gap-2.5 p-2 rounded-2xl bg-white/70 border border-slate-200/70 shadow-2xs backdrop-blur-xs">
-                <div className="h-7.5 w-7.5 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0 border border-indigo-100 shadow-2xs">
-                  <Calendar className="h-3.5 w-3.5" />
-                </div>
-                <div>
-                  <h3 className="text-xs font-bold text-slate-900 leading-tight">Calendar Sync</h3>
-                  <p className="text-[11px] text-slate-500 font-medium mt-0.5">Schedule team syncs</p>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-extrabold text-xs sm:text-sm text-slate-900">Customer Mail Studio</h3>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200">
+                      Gmail & Outlook
+                    </span>
+                  </div>
+                  <p className="text-[11px] sm:text-xs text-slate-500 font-medium mt-0.5 leading-relaxed">
+                    Real-time bidirectional Gmail/Outlook sync, shared group mailboxes linked to team channels, and full-screen email viewer.
+                  </p>
                 </div>
               </div>
             </div>
 
-            {/* Social Proof */}
-            <div className="mt-3 flex items-center gap-3 pt-0.5">
-              <div className="flex -space-x-1.5">
-                {['1534528741775-53994a69daeb', '1507003211169-0a1dd7228f2d', '1494790108377-be9c29b29330', '1500648767791-00dcc994a43e'].map((id) => (
-                  <img
-                    key={id}
-                    src={`https://images.unsplash.com/photo-${id}?w=80&auto=format&fit=crop&q=80`}
-                    alt="Teammate"
-                    className="h-5.5 w-5.5 rounded-full border border-white object-cover shadow-2xs"
-                  />
-                ))}
-              </div>
-              <div className="flex flex-col">
-                <div className="flex items-center gap-1">
-                  {[...Array(5)].map((_, i) => (
-                    <Star key={i} className="h-3 w-3 fill-amber-400 text-amber-400" />
+            {/* Social Proof & Security Badges */}
+            <div className="mt-3.5 flex items-center gap-4 pt-1">
+              <div className="flex items-center gap-2.5">
+                <div className="flex -space-x-1.5">
+                  {['1534528741775-53994a69daeb', '1507003211169-0a1dd7228f2d', '1494790108377-be9c29b29330', '1500648767791-00dcc994a43e'].map((id) => (
+                    <img
+                      key={id}
+                      src={`https://images.unsplash.com/photo-${id}?w=80&auto=format&fit=crop&q=80`}
+                      alt="Teammate"
+                      className="h-6 w-6 rounded-full border border-white object-cover shadow-2xs"
+                    />
                   ))}
-                  <span className="text-xs font-bold text-slate-800 ml-1">4.9 / 5</span>
                 </div>
-                <span className="text-[11px] font-medium text-slate-500">
-                  Trusted by 10,000+ teams worldwide
-                </span>
+                <div className="flex flex-col">
+                  <div className="flex items-center gap-1">
+                    {[...Array(5)].map((_, i) => (
+                      <Star key={i} className="h-3 w-3 fill-amber-400 text-amber-400" />
+                    ))}
+                    <span className="text-xs font-bold text-slate-800 ml-1">4.9 / 5</span>
+                  </div>
+                  <span className="text-[10px] font-medium text-slate-500">
+                    Trusted by 10,000+ teams worldwide
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 bg-white/70 border border-slate-200/70 rounded-xl px-2.5 py-1 shadow-2xs">
+                <ShieldCheck className="h-3.5 w-3.5 text-emerald-600" />
+                <span>Single Device Protection</span>
               </div>
             </div>
           </div>
 
-          {/* ── RIGHT COLUMN: Substantial & Perfectly Fitted Register Card ── */}
+          {/* ── RIGHT COLUMN: Perfectly Proportioned Auth Card (Single Page) ─── */}
           <div className="lg:col-span-6 xl:col-span-5 flex justify-center w-full">
-            <div className="w-full max-w-[415px] sm:max-w-[425px] bg-white rounded-3xl border border-slate-200/80 shadow-[0_16px_40px_rgba(79,70,229,0.08)] p-4 sm:p-5 relative shrink-0">
+            <div className="w-full max-w-[420px] bg-white rounded-3xl border border-slate-200/90 shadow-[0_16px_40px_rgba(79,70,229,0.08)] p-5 sm:p-6 relative shrink-0 backdrop-blur-md">
+              
               {/* Card Header with HD Patterns Logo */}
               <div className="flex flex-col items-center justify-center text-center">
-                <div className="flex items-center justify-center gap-2">
+                <div className="flex items-center justify-center gap-2 mb-0.5">
                   <img
                     src="/patterns-icon.png?v=2"
-                    alt="Patterns"
-                    className="h-6 w-auto object-contain"
+                    alt="Patterns Chat"
+                    className="h-7 w-auto object-contain drop-shadow-2xs"
                   />
                   <div className="flex items-center gap-1 font-black text-lg tracking-tight text-slate-900">
                     <span>Patterns</span>
-                    <span className="text-indigo-600">Chat</span>
+                    <span className="bg-gradient-to-r from-indigo-600 via-indigo-600 to-violet-600 bg-clip-text text-transparent font-black">
+                      Chat
+                    </span>
                   </div>
                 </div>
                 <h2 className="text-lg sm:text-xl font-black text-slate-900 tracking-tight mt-0.5">
@@ -286,33 +296,33 @@ export default function RegisterPage() {
               </div>
 
               {/* Segmented Pill Switcher */}
-              <div className="mt-2 flex items-center p-0.5 bg-slate-100/90 rounded-xl border border-slate-200/60">
+              <div className="mt-3 p-1 bg-slate-100/90 rounded-2xl border border-slate-200/90 flex items-center gap-1 shadow-inner-2xs">
                 <Link
                   href="/login"
-                  className="flex-1 flex items-center justify-center gap-1.5 py-1 px-3 rounded-lg text-slate-600 hover:text-slate-900 font-semibold text-xs transition-all"
+                  className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-white/60 font-semibold text-xs transition-all cursor-pointer"
                 >
-                  <LogIn className="h-3.5 w-3.5" />
-                  <span>Login</span>
+                  <LogIn className="h-3.5 w-3.5 text-slate-400" />
+                  <span>Sign In</span>
                 </Link>
                 <button
                   type="button"
-                  className="flex-1 flex items-center justify-center gap-1.5 py-1 px-3 rounded-lg bg-indigo-600 text-white font-bold text-xs shadow-xs transition-all"
+                  className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-xl bg-white text-indigo-700 shadow-xs ring-1 ring-slate-900/5 font-extrabold text-xs transition-all cursor-pointer"
                 >
-                  <UserPlus className="h-3.5 w-3.5" />
-                  <span>Sign Up</span>
+                  <UserPlus className="h-3.5 w-3.5 text-indigo-600" />
+                  <span>Create Account</span>
                 </button>
               </div>
 
               {/* Error Alert */}
               {error && (
-                <div className="mt-1.5 rounded-xl border border-rose-200 bg-rose-50 p-2 text-xs text-rose-700 flex items-center gap-1.5 animate-in fade-in">
+                <div className="mt-2 rounded-2xl border border-rose-200 bg-rose-50/90 p-2 text-xs text-rose-700 flex items-center gap-2 animate-in fade-in">
                   <AlertCircle className="h-3.5 w-3.5 shrink-0 text-rose-500" />
-                  <span className="text-xs font-medium leading-snug">{error}</span>
+                  <span className="text-xs font-semibold leading-snug">{error}</span>
                 </div>
               )}
 
               {/* Form */}
-              <form onSubmit={handleSubmit} className="mt-2 space-y-1.5">
+              <form onSubmit={handleSubmit} className="mt-2.5 space-y-2">
                 {/* Full Name */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-0.5">
@@ -326,7 +336,7 @@ export default function RegisterPage() {
                       value={name}
                       onChange={(e) => setName(e.target.value)}
                       placeholder="Jane Doe"
-                      className="w-full pl-8.5 pr-3.5 py-1.5 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all shadow-2xs"
+                      className="w-full pl-8.5 pr-3.5 py-1.5 sm:py-2 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-white focus:bg-white text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-indigo-600 focus:ring-4 focus:ring-indigo-500/10 transition-all shadow-2xs"
                     />
                   </div>
                 </div>
@@ -344,7 +354,7 @@ export default function RegisterPage() {
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder="name@company.com"
-                      className="w-full pl-8.5 pr-3.5 py-1.5 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all shadow-2xs"
+                      className="w-full pl-8.5 pr-3.5 py-1.5 sm:py-2 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-white focus:bg-white text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-indigo-600 focus:ring-4 focus:ring-indigo-500/10 transition-all shadow-2xs"
                     />
                   </div>
                 </div>
@@ -362,13 +372,14 @@ export default function RegisterPage() {
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="Create a strong password"
-                      className="w-full pl-8.5 pr-8.5 py-1.5 rounded-xl border border-slate-200 bg-white text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition-all shadow-2xs"
+                      className="w-full pl-8.5 pr-8.5 py-1.5 sm:py-2 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-white focus:bg-white text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-indigo-600 focus:ring-4 focus:ring-indigo-500/10 transition-all shadow-2xs"
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
-                      className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 hover:text-slate-600 transition-colors"
+                      className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
                       tabIndex={-1}
+                      title={showPassword ? 'Hide password' : 'Show password'}
                     >
                       {showPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                     </button>
@@ -379,7 +390,7 @@ export default function RegisterPage() {
                 <button
                   type="submit"
                   disabled={isSubmitting || isGoogleSubmitting}
-                  className="w-full mt-1 py-2 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 active:scale-[0.99] text-white font-bold text-xs sm:text-sm shadow-md shadow-indigo-600/25 flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                  className="w-full mt-1 py-2 sm:py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 via-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 active:scale-[0.99] text-white font-bold text-xs sm:text-sm shadow-md shadow-indigo-600/25 flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer"
                 >
                   {isSubmitting ? (
                     <>
@@ -388,7 +399,7 @@ export default function RegisterPage() {
                     </>
                   ) : (
                     <>
-                      <span>Create Account</span>
+                      <span>Create Free Account</span>
                       <ArrowRight className="h-3.5 w-3.5" />
                     </>
                   )}
@@ -396,21 +407,21 @@ export default function RegisterPage() {
               </form>
 
               {/* Divider */}
-              <div className="relative flex items-center justify-center my-1.5">
+              <div className="relative flex items-center justify-center my-2">
                 <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-slate-100" />
+                  <div className="w-full border-t border-slate-200/80" />
                 </div>
                 <span className="relative bg-white px-2.5 text-[9px] font-bold text-slate-400 uppercase tracking-wider">
                   or continue with
                 </span>
               </div>
 
-              {/* Google-Only Full Width Button */}
+              {/* Google OAuth Button */}
               <button
                 type="button"
                 onClick={handleStartGoogleOAuth}
                 disabled={isSubmitting || isGoogleSubmitting}
-                className="w-full py-1.5 sm:py-2 px-4 rounded-xl border border-slate-200/90 bg-white hover:bg-slate-50 active:scale-[0.99] transition-all flex items-center justify-center gap-2.5 text-xs sm:text-sm font-bold text-slate-700 shadow-2xs hover:border-slate-300 disabled:opacity-50 group"
+                className="w-full py-1.5 sm:py-2 px-4 rounded-xl border border-slate-200/90 bg-white hover:bg-slate-50 active:scale-[0.99] transition-all flex items-center justify-center gap-2.5 text-xs font-bold text-slate-700 shadow-2xs hover:border-slate-300 disabled:opacity-50 cursor-pointer group"
                 title="Sign up with your Google or Google Workspace account"
               >
                 {isGoogleSubmitting ? (
@@ -448,14 +459,14 @@ export default function RegisterPage() {
                 <button
                   type="button"
                   onClick={() => setShowGoogleModal(true)}
-                  className="text-[10px] text-slate-400 hover:text-indigo-600 transition-colors font-medium underline"
+                  className="text-[10px] text-slate-400 hover:text-indigo-600 transition-colors font-medium underline cursor-pointer"
                 >
                   Quick Test Account Picker
                 </button>
               </div>
 
               {/* Card Footer */}
-              <div className="mt-2 text-center text-xs text-slate-500">
+              <div className="mt-2 pt-1.5 border-t border-slate-100 text-center text-xs text-slate-500">
                 Already have an account?{' '}
                 <Link href="/login" className="font-bold text-indigo-600 hover:text-indigo-700 hover:underline">
                   Sign in
@@ -466,9 +477,20 @@ export default function RegisterPage() {
         </div>
       </main>
 
-      {/* Footer */}
-      <footer className="w-full py-1 text-center text-[11px] text-slate-400 z-20 shrink-0">
-        © 2026 Patterns Chat Technologies. All rights reserved.
+      {/* ─────────────────────────────────────────────────────────────
+          FOOTER (Fixed, Single Screen Fit)
+      ───────────────────────────────────────────────────────────── */}
+      <footer className="w-full border-t border-slate-200/90 bg-white/70 backdrop-blur-md z-20 shrink-0 py-2 sm:py-2.5">
+        <div className="max-w-7xl mx-auto px-4 sm:px-8 lg:px-12 flex flex-col sm:flex-row items-center justify-between gap-1 text-[11px] text-slate-400 font-medium">
+          <span className="text-[11px] text-slate-400 font-medium">© 2026 Patterns Chat Technologies. Quality. Delivered.</span>
+          <div className="flex items-center gap-3 text-slate-400 text-[11px]">
+            <span>Unified Team Chat</span>
+            <span>•</span>
+            <span>Customer Mail Studio</span>
+            <span>•</span>
+            <span>Single Device Security</span>
+          </div>
+        </div>
       </footer>
 
       {/* ─────────────────────────────────────────────────────────────
@@ -477,8 +499,8 @@ export default function RegisterPage() {
       {showGoogleModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-in fade-in duration-150">
           <div className="w-full max-w-sm bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden text-slate-900 animate-in zoom-in-95 duration-200">
-            {/* Modal Header with Google G */}
-            <div className="p-5 border-b border-slate-100 flex items-start justify-between">
+            {/* Modal Header */}
+            <div className="p-4 border-b border-slate-100 flex items-start justify-between">
               <div className="flex items-center gap-3">
                 <svg className="h-6 w-6 shrink-0" viewBox="0 0 24 24">
                   <path
@@ -510,110 +532,84 @@ export default function RegisterPage() {
               <button
                 type="button"
                 onClick={() => setShowGoogleModal(false)}
-                className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors"
+                className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
             {/* Account List */}
-            <div className="p-3 space-y-1.5 max-h-[320px] overflow-y-auto">
+            <div className="p-3 space-y-1.5 max-h-[300px] overflow-y-auto">
               {PRESET_GOOGLE_ACCOUNTS.map((acc) => (
                 <button
                   key={acc.email}
                   type="button"
                   onClick={() => executeGoogleLogin(acc.email, acc.name, acc.avatarUrl)}
                   disabled={isGoogleSubmitting}
-                  className="w-full flex items-center justify-between p-2.5 rounded-2xl hover:bg-slate-50 border border-transparent hover:border-slate-200 transition-all text-left group"
+                  className="w-full flex items-center gap-3 p-2 rounded-2xl hover:bg-indigo-50/70 border border-transparent hover:border-indigo-100 transition-all text-left group cursor-pointer"
                 >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <img
-                      src={acc.avatarUrl}
-                      alt={acc.name}
-                      className="h-9 w-9 rounded-full border border-slate-200 shadow-2xs group-hover:scale-105 transition-transform shrink-0"
-                    />
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-slate-900 truncate group-hover:text-indigo-600 transition-colors">
-                        {acc.name}
-                      </p>
-                      <p className="text-[11px] text-slate-400 font-mono truncate">{acc.email}</p>
-                    </div>
+                  <img
+                    src={acc.avatarUrl}
+                    alt={acc.name}
+                    className="h-8 w-8 rounded-full border border-slate-200 shrink-0 object-cover"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-bold text-slate-900 group-hover:text-indigo-600 transition-colors truncate">
+                      {acc.name}
+                    </p>
+                    <p className="text-[11px] text-slate-500 truncate">{acc.email}</p>
                   </div>
-                  <UserCheck className="h-4 w-4 text-slate-300 group-hover:text-indigo-600 transition-colors shrink-0" />
+                  <CheckCircle2 className="h-4 w-4 text-slate-300 group-hover:text-indigo-600 transition-colors shrink-0" />
                 </button>
               ))}
+            </div>
 
-              {/* Use Another Google Account Toggle */}
+            {/* Custom Google Account Input Toggle */}
+            <div className="p-3 border-t border-slate-100 bg-slate-50/50">
               {!showCustomGoogleInput ? (
                 <button
                   type="button"
                   onClick={() => setShowCustomGoogleInput(true)}
-                  className="w-full flex items-center gap-3 p-2.5 rounded-2xl hover:bg-indigo-50/60 border border-dashed border-slate-200 hover:border-indigo-200 text-left transition-all text-indigo-600 group mt-1"
+                  className="w-full flex items-center justify-center gap-2 py-1.5 px-3 text-xs font-bold text-indigo-600 hover:bg-white rounded-xl border border-dashed border-indigo-200 transition-all cursor-pointer"
                 >
-                  <div className="h-9 w-9 rounded-full bg-indigo-50 border border-indigo-100 flex items-center justify-center shrink-0 text-indigo-600 group-hover:scale-105 transition-transform">
-                    <PlusCircle className="h-4 w-4" />
-                  </div>
-                  <div>
-                    <p className="text-xs font-bold">Use another Google account</p>
-                    <p className="text-[10px] text-slate-400">Enter your Gmail or Workspace email</p>
-                  </div>
+                  <PlusCircle className="h-3.5 w-3.5" />
+                  <span>Use another Google account</span>
                 </button>
               ) : (
-                <form
-                  onSubmit={handleCustomGoogleSubmit}
-                  className="p-3 bg-slate-50 rounded-2xl border border-slate-200 mt-2 space-y-2 animate-in fade-in"
-                >
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-700 mb-1">
-                      Your Google Name (Optional)
-                    </label>
-                    <input
-                      type="text"
-                      value={customGoogleName}
-                      onChange={(e) => setCustomGoogleName(e.target.value)}
-                      placeholder="e.g. Alex Miller"
-                      className="w-full px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs text-slate-900 focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-700 mb-1">
-                      Google Email Address *
-                    </label>
-                    <input
-                      type="email"
-                      required
-                      value={customGoogleEmail}
-                      onChange={(e) => setCustomGoogleEmail(e.target.value)}
-                      placeholder="you@gmail.com"
-                      className="w-full px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs text-slate-900 focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
-                  <div className="flex items-center justify-end gap-2 pt-1">
+                <form onSubmit={handleCustomGoogleSubmit} className="space-y-2">
+                  <input
+                    type="text"
+                    value={customGoogleName}
+                    onChange={(e) => setCustomGoogleName(e.target.value)}
+                    placeholder="Your Name (e.g. Alex Rivera)"
+                    className="w-full px-3 py-1.5 rounded-xl border border-slate-200 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-indigo-500 bg-white"
+                  />
+                  <input
+                    type="email"
+                    required
+                    value={customGoogleEmail}
+                    onChange={(e) => setCustomGoogleEmail(e.target.value)}
+                    placeholder="your-google-email@gmail.com"
+                    className="w-full px-3 py-1.5 rounded-xl border border-slate-200 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-indigo-500 bg-white"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="submit"
+                      disabled={isGoogleSubmitting || !customGoogleEmail.trim()}
+                      className="flex-1 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs transition-all disabled:opacity-50 cursor-pointer"
+                    >
+                      Continue
+                    </button>
                     <button
                       type="button"
                       onClick={() => setShowCustomGoogleInput(false)}
-                      className="px-3 py-1 rounded-lg text-xs font-semibold text-slate-500 hover:text-slate-800"
+                      className="px-3 py-1.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 font-bold text-xs transition-all cursor-pointer"
                     >
-                      Back
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={!customGoogleEmail.trim() || isGoogleSubmitting}
-                      className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-xs disabled:opacity-50"
-                    >
-                      Continue
+                      Cancel
                     </button>
                   </div>
                 </form>
               )}
-            </div>
-
-            {/* Modal Disclaimer */}
-            <div className="p-3.5 bg-slate-50/80 border-t border-slate-100 flex items-center gap-2 text-[10px] text-slate-400">
-              <ShieldCheck className="h-4 w-4 text-emerald-600 shrink-0" />
-              <span>
-                To continue, Google shares your verified profile and email with Patterns Chat.
-              </span>
             </div>
           </div>
         </div>

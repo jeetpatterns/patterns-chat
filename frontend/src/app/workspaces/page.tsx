@@ -136,9 +136,9 @@ export default function WorkspacesPage() {
               alt="Patterns"
               className="h-8 w-auto object-contain transition-transform group-hover:scale-105 drop-shadow-2xs"
             />
-            <div className="flex items-center gap-1 font-black text-xl tracking-tight text-slate-900">
+            <div className="flex items-center gap-1.5 font-black text-xl tracking-tight text-slate-900">
               <span>Patterns</span>
-              <span className="text-indigo-600">Chat</span>
+              <span className="bg-gradient-to-r from-indigo-600 via-indigo-600 to-violet-600 bg-clip-text text-transparent font-black">Chat</span>
             </div>
           </Link>
 

@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Patterns Chat — Quality. Delivered. | Team Collaboration & Chat',
+  title: 'Patterns Chat — Quality. Delivered. | Unified Team Chat & Customer Mail Platform',
   description:
-    'Patterns Chat brings your team, conversations, and tools into one powerful workspace. Chat, meet, share and get things done — all in one place.',
+    'Patterns Chat brings your entire customer and team workflow together: real-time team chat, direct messages, and unified multi-account customer email in one workspace.',
   icons: {
     icon: [
       { url: '/favicon.ico?v=2', sizes: '48x48', type: 'image/x-icon' },

@@ -710,15 +710,7 @@ function WorkspaceShellContent() {
     }
   }, [activeRecipient]);
 
-  // Update browser document tab title with unread indicator
-  useEffect(() => {
-    const baseTitle = currentWs?.name ? `${currentWs.name} - Patterns` : 'Patterns';
-    if (totalUnreadCount > 0) {
-      document.title = `(${totalUnreadCount}) 💬 ${baseTitle}`;
-    } else {
-      document.title = baseTitle;
-    }
-  }, [totalUnreadCount, currentWs?.name]);
+  // Browser tab title is updated dynamically below taking both Chat and Mail unread counts into account
 
   const callTimerRef = useRef<NodeJS.Timeout | null>(null);
   const ringtoneIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -836,6 +828,15 @@ function WorkspaceShellContent() {
   );
   const [isMailViewActive, setIsMailViewActive] = useState(tabParam === 'mail');
 
+  const [mailAccounts, setMailAccounts] = useState<EmailAccountItem[]>([]);
+  const [selectedMailAccountId, setSelectedMailAccountId] = useState<string | null>(null);
+  const [mailFolder, setMailFolder] = useState<'INBOX' | 'STARRED' | 'SENT' | 'DRAFTS' | 'TRASH'>('INBOX');
+  const [mailMessages, setMailMessages] = useState<EmailMessageItem[]>([]);
+  const [selectedEmail, setSelectedEmail] = useState<EmailMessageItem | null>(null);
+  const [isMailLoading, setIsMailLoading] = useState(false);
+  const [mailSearchQuery, setMailSearchQuery] = useState('');
+  const [mailStatusFilter, setMailStatusFilter] = useState<'unhandled' | 'done' | 'all'>('unhandled');
+
   useEffect(() => {
     if (tabParam === 'mail') {
       setActiveAppTab('mail');
@@ -849,6 +850,31 @@ function WorkspaceShellContent() {
   const handleSwitchAppTab = (tab: 'chat' | 'mail') => {
     setActiveAppTab(tab);
     setIsMailViewActive(tab === 'mail');
+    setShowCalendarView(false);
+    setShowMobileSidebar(false);
+    if (tab === 'chat') {
+      const scrollDown = () => {
+        if (messagesEndRef.current) {
+          messagesEndRef.current.scrollIntoView({ behavior: 'auto' });
+          const parent = messagesEndRef.current.parentElement;
+          if (parent) {
+            parent.scrollTop = parent.scrollHeight;
+          }
+        }
+      };
+      if (typeof window !== 'undefined') {
+        requestAnimationFrame(scrollDown);
+        setTimeout(scrollDown, 50);
+        setTimeout(scrollDown, 150);
+        setTimeout(scrollDown, 350);
+      }
+    }
+    if (tab === 'mail') {
+      setSelectedEmail(null);
+      if (mailAccounts.length > 0 && !selectedMailAccountId) {
+        setSelectedMailAccountId(mailAccounts[0].id);
+      }
+    }
     if (typeof window !== 'undefined') {
       const url = new URL(window.location.href);
       if (tab === 'mail') {
@@ -859,15 +885,6 @@ function WorkspaceShellContent() {
       window.history.pushState({}, '', url.toString());
     }
   };
-
-  const [mailAccounts, setMailAccounts] = useState<EmailAccountItem[]>([]);
-  const [selectedMailAccountId, setSelectedMailAccountId] = useState<string | null>(null);
-  const [mailFolder, setMailFolder] = useState<'INBOX' | 'STARRED' | 'SENT' | 'DRAFTS' | 'TRASH'>('INBOX');
-  const [mailMessages, setMailMessages] = useState<EmailMessageItem[]>([]);
-  const [selectedEmail, setSelectedEmail] = useState<EmailMessageItem | null>(null);
-  const [isMailLoading, setIsMailLoading] = useState(false);
-  const [mailSearchQuery, setMailSearchQuery] = useState('');
-  const [mailStatusFilter, setMailStatusFilter] = useState<'unhandled' | 'done' | 'all'>('unhandled');
   const [showConnectMailModal, setShowConnectMailModal] = useState(false);
   const [connectEmailInput, setConnectEmailInput] = useState('');
   const [connectEmailProvider, setConnectEmailProvider] = useState<'GOOGLE' | 'MICROSOFT' | 'CUSTOM'>('GOOGLE');
@@ -992,6 +1009,24 @@ function WorkspaceShellContent() {
     return mailAccounts.reduce((sum, acc) => sum + (acc.unreadCount || 0), 0);
   }, [mailAccounts]);
 
+  // Dynamic Chat Browser Title updates
+  useEffect(() => {
+    const baseTitle = currentWs?.name ? `${currentWs.name} | Patterns Chat` : 'Patterns Chat';
+    if (activeAppTab === 'mail') {
+      if (totalUnreadEmails > 0) {
+        document.title = `(${totalUnreadEmails}) Mail - ${baseTitle}`;
+      } else {
+        document.title = `Mail - ${baseTitle}`;
+      }
+    } else {
+      if (totalUnreadCount > 0) {
+        document.title = `(${totalUnreadCount}) Chat - ${baseTitle}`;
+      } else {
+        document.title = `Chat - ${baseTitle}`;
+      }
+    }
+  }, [activeAppTab, totalUnreadCount, totalUnreadEmails, currentWs?.name]);
+
   const filteredMailMessages = useMemo(() => {
     return mailMessages.filter((msg) => {
       // Triage status (unhandled vs done) only applies to INBOX and STARRED
@@ -1049,12 +1084,9 @@ function WorkspaceShellContent() {
         setMailTotalMessages(data.total || messages.length);
         setMailTotalPages(data.totalPages || 1);
 
-        // Ensure reading pane shows first email of this folder / account
-        if (messages.length > 0) {
-          if (!selectedEmail || selectedEmail.accountId !== targetAccountId || selectedEmail.folder !== targetFolder) {
-            handleSelectEmail(messages[0]);
-          }
-        } else {
+        // In Gmail layout, default view displays all emails in the list
+        // Reset selected email if it belonged to a different account or folder
+        if (selectedEmail && (selectedEmail.accountId !== targetAccountId || selectedEmail.folder !== targetFolder)) {
           setSelectedEmail(null);
         }
       }
@@ -4685,10 +4717,29 @@ function WorkspaceShellContent() {
     return () => clearTimeout(timer);
   }, [searchQuery, searchFilter, showSearchModal, workspaceId, token]);
 
-  // 3. Auto-scroll effects
+  // 3. Auto-scroll effects (Always scroll to latest messages on message updates, channel switch, or tab switch from mail)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, directMessages]);
+    if (activeAppTab === 'chat' && !isMailViewActive && !showCalendarView) {
+      const scrollDown = () => {
+        if (messagesEndRef.current) {
+          messagesEndRef.current.scrollIntoView({ behavior: 'auto' });
+          const parent = messagesEndRef.current.parentElement;
+          if (parent) {
+            parent.scrollTop = parent.scrollHeight;
+          }
+        }
+      };
+      scrollDown();
+      const t1 = setTimeout(scrollDown, 50);
+      const t2 = setTimeout(scrollDown, 150);
+      const t3 = setTimeout(scrollDown, 350);
+      return () => {
+        clearTimeout(t1);
+        clearTimeout(t2);
+        clearTimeout(t3);
+      };
+    }
+  }, [messages, directMessages, activeAppTab, isMailViewActive, showCalendarView, activeChannel?.id, activeRecipient?.id]);
 
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -6056,42 +6107,102 @@ function WorkspaceShellContent() {
       )}
 
       {/* ─────────────────────────────────────────────────────────────
-          GLOBAL TOP BAR (Image 3 Caliber)
+          GLOBAL TOP NAVIGATION (Chat ⇄ Mail Switcher & Brand Hub)
       ───────────────────────────────────────────────────────────── */}
-      <header className="h-14 sm:h-16 w-full bg-white border-b border-slate-200/80 px-4 sm:px-6 flex items-center justify-between shrink-0 z-20 shadow-[0_1px_2px_rgba(0,0,0,0.02)]">
-        {/* Left: Mobile Toggle & Patterns Logo */}
-        <div className="flex items-center gap-3">
+      <header className="h-14 sm:h-16 w-full bg-white border-b border-slate-200/90 px-3 sm:px-6 flex items-center justify-between shrink-0 z-20 shadow-[0_1px_3px_rgba(0,0,0,0.03)]">
+        {/* Left: Mobile Toggle, Brand & Workspace Indicator */}
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           <button
             type="button"
             onClick={() => setShowMobileSidebar(true)}
-            className="p-2 -ml-1 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl md:hidden transition-colors"
+            className="p-2 -ml-1 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl md:hidden transition-colors cursor-pointer"
             title="Open navigation"
           >
             <Menu className="h-5 w-5" />
           </button>
-          <Link href="/workspaces" className="flex items-center gap-2.5 group shrink-0">
+          <Link href="/workspaces" className="flex items-center gap-2.5 group shrink-0" title="Return to Workspaces Dashboard">
             <img
               src="/patterns-icon.png?v=2"
-              alt="Patterns"
+              alt="Patterns Chat"
               className="h-8 sm:h-9 w-auto object-contain transition-transform group-hover:scale-105 drop-shadow-2xs"
             />
             <div className="flex items-center gap-1 font-black text-lg sm:text-xl tracking-tight text-slate-900">
               <span>Patterns</span>
-              <span className="text-indigo-600 font-extrabold">Chat</span>
+              <span className="bg-gradient-to-r from-indigo-600 via-indigo-600 to-violet-600 bg-clip-text text-transparent font-black">Chat</span>
             </div>
           </Link>
+
         </div>
 
-        {/* Center: Global Spotlight Search Bar */}
-        <div className="flex-1 max-w-xl mx-4 hidden sm:block">
+        {/* Center: PRIMARY MODULE SWITCHER (Chat ⇄ Mail) */}
+        <div className="flex items-center mx-1 sm:mx-3">
+          <nav aria-label="App Modules" className="bg-slate-100/90 p-1 rounded-2xl border border-slate-200/90 flex items-center gap-1 shadow-inner-2xs">
+            {/* 💬 Chat Module Tab */}
+            <button
+              type="button"
+              onClick={() => {
+                handleSwitchAppTab('chat');
+                setShowCalendarView(false);
+              }}
+              className={`relative flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer select-none ${
+                activeAppTab === 'chat' && !showCalendarView
+                  ? 'bg-white text-indigo-700 shadow-xs ring-1 ring-slate-900/5 font-extrabold'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/60 font-semibold'
+              }`}
+              title="Chat Module: Internal team conversations, client channels, and direct messages"
+            >
+              <div className={`p-1 rounded-lg transition-colors ${
+                activeAppTab === 'chat' && !showCalendarView ? 'bg-indigo-50 text-indigo-600' : 'text-slate-400'
+              }`}>
+                <MessageSquare className="h-3.5 w-3.5" />
+              </div>
+              <span className="tracking-tight">Chat</span>
+              {totalUnreadCount > 0 && (
+                <span className="inline-flex items-center justify-center min-w-[18px] h-4.5 px-1.5 rounded-full text-[10px] font-black bg-indigo-600 text-white shadow-2xs">
+                  {totalUnreadCount}
+                </span>
+              )}
+            </button>
+
+            {/* ✉️ Mail Module Tab */}
+            <button
+              type="button"
+              onClick={() => {
+                handleSwitchAppTab('mail');
+                setShowCalendarView(false);
+              }}
+              className={`relative flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer select-none ${
+                activeAppTab === 'mail' && !showCalendarView
+                  ? 'bg-white text-indigo-700 shadow-xs ring-1 ring-slate-900/5 font-extrabold'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-white/60 font-semibold'
+              }`}
+              title="Mail Module: Customer emails, Google/Outlook OAuth, collaborative shared mailboxes"
+            >
+              <div className={`p-1 rounded-lg transition-colors ${
+                activeAppTab === 'mail' && !showCalendarView ? 'bg-indigo-50 text-indigo-600' : 'text-slate-400'
+              }`}>
+                <Mail className="h-3.5 w-3.5" />
+              </div>
+              <span className="tracking-tight">Mail</span>
+              {totalUnreadEmails > 0 && (
+                <span className="inline-flex items-center justify-center min-w-[18px] h-4.5 px-1.5 rounded-full text-[10px] font-black bg-gradient-to-r from-indigo-600 via-indigo-600 to-violet-600 text-white shadow-2xs">
+                  {totalUnreadEmails}
+                </span>
+              )}
+            </button>
+          </nav>
+        </div>
+
+        {/* Center-Right: Global Spotlight Search Bar */}
+        <div className="flex-1 max-w-xs lg:max-w-sm xl:max-w-md mx-2 hidden md:block">
           <button
             type="button"
             onClick={() => setShowSearchModal(true)}
-            className="w-full flex items-center justify-between px-3.5 py-2 rounded-xl bg-slate-50 hover:bg-white border border-slate-200 hover:border-indigo-300 text-xs text-slate-400 hover:text-slate-700 transition-all shadow-subtle group"
+            className="w-full flex items-center justify-between px-3.5 py-1.5 rounded-xl bg-slate-50 hover:bg-white border border-slate-200 hover:border-indigo-300 text-xs text-slate-400 hover:text-slate-700 transition-all shadow-subtle group cursor-pointer"
           >
-            <div className="flex items-center gap-2.5 truncate">
-              <Search className="h-4 w-4 text-slate-400 group-hover:text-indigo-600 transition-colors shrink-0" />
-              <span className="truncate text-slate-500 font-medium">Search anything, messages, files, or people...</span>
+            <div className="flex items-center gap-2 truncate">
+              <Search className="h-3.5 w-3.5 text-slate-400 group-hover:text-indigo-600 transition-colors shrink-0" />
+              <span className="truncate text-slate-500 font-medium">Search messages, emails, team...</span>
             </div>
             <kbd className="font-mono text-[10px] bg-white border border-slate-200 px-1.5 py-0.5 rounded text-slate-400 group-hover:text-indigo-600 group-hover:border-indigo-200 font-bold shadow-2xs shrink-0">
               ⌘ K
@@ -6099,13 +6210,14 @@ function WorkspaceShellContent() {
           </button>
         </div>
 
-        {/* Right: Notifications, Help, User Avatar */}
+        {/* Right: Notifications, Help, Profile */}
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+
           <button
             type="button"
             onClick={() => setShowSearchModal(true)}
-            className="p-2 rounded-full hover:bg-slate-100 text-slate-600 hover:text-slate-900 sm:hidden transition-colors"
-            title="Search workspace"
+            className="p-2 rounded-full hover:bg-slate-100 text-slate-600 hover:text-slate-900 md:hidden transition-colors"
+            title="Search messages, emails, team"
           >
             <Search className="h-5 w-5" />
           </button>
@@ -6113,7 +6225,7 @@ function WorkspaceShellContent() {
           <button
             type="button"
             onClick={() => setShowNotificationDrawer(true)}
-            className="relative p-2 rounded-full hover:bg-slate-100 text-slate-600 hover:text-slate-900 transition-colors"
+            className="relative p-2 rounded-full hover:bg-slate-100 text-slate-600 hover:text-slate-900 transition-colors cursor-pointer"
             title="Activity & Notifications"
           >
             <Bell className="h-5 w-5" />
@@ -6128,7 +6240,7 @@ function WorkspaceShellContent() {
           <button
             type="button"
             onClick={() => setShowCommandPalette(true)}
-            className="p-2 rounded-full hover:bg-slate-100 text-slate-600 hover:text-slate-900 transition-colors"
+            className="p-2 rounded-full hover:bg-slate-100 text-slate-600 hover:text-slate-900 transition-colors cursor-pointer"
             title="Help & Shortcuts (⌘K)"
           >
             <HelpCircle className="h-5 w-5" />
@@ -6334,48 +6446,117 @@ function WorkspaceShellContent() {
         /* ─────────────────────────────────────────────────────────────
             DEDICATED FULL-SCREEN MAIL & OAUTH INBOX CLIENT
         ───────────────────────────────────────────────────────────── */
-        <div className="flex-1 flex overflow-hidden w-full h-full min-w-0 bg-[#FAFBFC]">
+        <div className="flex-1 flex overflow-hidden p-2 sm:p-3 md:p-4 gap-2 sm:gap-3 md:gap-4 min-h-0 relative">
           {/* ─────────────────────────────────────────────────────────────
               1. DEDICATED MAIL STUDIO SIDEBAR (Chat / Slack caliber)
           ───────────────────────────────────────────────────────────── */}
-          <aside className="w-56 sm:w-60 lg:w-64 bg-white flex flex-col shrink-0 border-r border-slate-200/80 shadow-[2px_0_12px_rgba(0,0,0,0.02)] select-none">
-            {/* Mail Sidebar Header */}
+          <aside
+            className={`fixed inset-y-0 left-0 z-40 w-72 bg-white flex flex-col shrink-0 border-r border-slate-200 shadow-2xl md:shadow-xs md:border md:rounded-2xl md:static md:translate-x-0 transition-transform duration-300 ease-in-out select-none overflow-hidden ${
+              showMobileSidebar ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+            }`}
+          >
+            {/* Workspace Hub & Switcher Header (Identical across Chat & Mail) */}
             <div className="p-3 border-b border-slate-100 relative">
               <div className="flex items-center justify-between gap-2">
-                <div className="flex-1 flex items-center gap-2.5 p-1 min-w-0">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-600 to-violet-600 text-white font-black text-sm shadow-md shadow-indigo-600/25">
-                    <Mail className="h-4.5 w-4.5" />
+                <button
+                  type="button"
+                  onClick={() => setShowWorkspaceSwitcher(!showWorkspaceSwitcher)}
+                  className="flex-1 flex items-center gap-2.5 p-2 rounded-xl hover:bg-slate-100/80 transition-all text-left min-w-0 group cursor-pointer"
+                  title="Switch Workspace"
+                >
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-600 to-violet-600 text-white font-black text-sm shadow-md shadow-indigo-600/25 group-hover:scale-105 transition-transform">
+                    {currentWs.name.slice(0, 2).toUpperCase()}
                   </div>
                   <div className="flex flex-col min-w-0 flex-1">
-                    <span className="font-extrabold text-slate-900 text-sm tracking-tight truncate">
-                      Mail Studio
+                    <span className="font-extrabold text-slate-900 text-sm tracking-tight truncate flex items-center gap-1.5">
+                      <span className="truncate">{currentWs.name}</span>
+                      <ChevronDown className={`h-3.5 w-3.5 text-slate-400 shrink-0 transition-transform ${showWorkspaceSwitcher ? 'rotate-180 text-indigo-600' : ''}`} />
                     </span>
-                    <span className="text-[11px] text-slate-400 font-medium flex items-center gap-1.5 truncate">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
-                      <span className="truncate">{selectedMailAccount?.emailAddress || currentWs?.name || 'Workspace'}</span>
+                    <span className="text-[11px] text-slate-400 font-medium flex items-center gap-1.5">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                      <span>{members.length} {members.length === 1 ? 'member' : 'members'}</span>
+                      {isWorkspaceOwner && (
+                        <span className="text-[9px] font-bold uppercase text-indigo-700 bg-indigo-50 px-1 rounded border border-indigo-200/80">
+                          Owner
+                        </span>
+                      )}
                     </span>
                   </div>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
+                </button>
+
+                {isWorkspaceOwner && (
                   <button
                     type="button"
-                    onClick={() => handleSyncMailAccount()}
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-50 border border-slate-200 hover:bg-indigo-50 hover:border-indigo-300 text-slate-600 hover:text-indigo-600 transition-all shadow-2xs active:scale-95"
-                    title="Sync and Refresh Live Emails"
+                    onClick={copyInviteCode}
+                    title="Copy Workspace Invite Code"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-50 border border-slate-200 hover:bg-indigo-50 hover:border-indigo-300 text-slate-600 hover:text-indigo-600 transition-all shadow-subtle active:scale-95 cursor-pointer"
                   >
-                    <RefreshCw className={`h-3.5 w-3.5 ${isMailLoading ? 'animate-spin text-indigo-600' : ''}`} />
+                    {copiedCode ? <Check className="h-4 w-4 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSwitchAppTab('chat')}
-                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-600 font-bold text-xs border border-indigo-200 transition-colors"
-                    title="Back to Chat & Channels"
-                  >
-                    <MessageSquare className="h-3.5 w-3.5" />
-                    <span>Chat</span>
-                  </button>
-                </div>
+                )}
+
+                {/* Mobile close button */}
+                <button
+                  type="button"
+                  onClick={() => setShowMobileSidebar(false)}
+                  className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 md:hidden transition-colors shrink-0 cursor-pointer"
+                  title="Close sidebar"
+                >
+                  <X className="h-5 w-5" />
+                </button>
               </div>
+
+              {/* Workspace Switcher Popover */}
+              {showWorkspaceSwitcher && (
+                <div className="absolute top-full left-3 right-3 mt-1.5 rounded-2xl bg-white border border-slate-200/90 shadow-2xl p-2 z-50 animate-in zoom-in-95 duration-150">
+                  <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center justify-between border-b border-slate-100 mb-1">
+                    <span>Switch Workspace</span>
+                    <span className="font-mono text-slate-400 font-normal">{workspaces.length} total</span>
+                  </div>
+                  <div className="max-h-48 overflow-y-auto space-y-1">
+                    {workspaces.map((ws) => {
+                      const isActive = ws.id === currentWs.id;
+                      return (
+                        <button
+                          key={ws.id}
+                          type="button"
+                          onClick={() => {
+                            setShowWorkspaceSwitcher(false);
+                            router.push(`/workspace/${ws.id}`);
+                          }}
+                          className={`w-full flex items-center justify-between p-2 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                            isActive
+                              ? 'bg-indigo-50 text-indigo-900 border border-indigo-200/80 shadow-2xs font-bold'
+                              : 'hover:bg-slate-50 text-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className={`h-6 w-6 rounded-lg flex items-center justify-center text-[10px] font-black ${
+                              isActive
+                                ? 'bg-indigo-600 text-white'
+                                : 'bg-slate-100 text-slate-700 border border-slate-200'
+                            }`}>
+                              {ws.name.slice(0, 2).toUpperCase()}
+                            </div>
+                            <span className="truncate">{ws.name}</span>
+                          </div>
+                          {isActive && <Check className="h-3.5 w-3.5 text-indigo-600 shrink-0" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-2 pt-2 border-t border-slate-100 flex items-center justify-between gap-2 px-1">
+                    <Link
+                      href="/workspaces"
+                      onClick={() => setShowWorkspaceSwitcher(false)}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-xs font-semibold text-slate-700 hover:text-indigo-600 transition-colors"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      <span>All Workspaces</span>
+                    </Link>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Quick Action: Compose Button */}
@@ -6738,359 +6919,31 @@ function WorkspaceShellContent() {
               </div>
             </div>
 
-            {/* Sidebar Footer User Profile */}
-            <div className="p-3 border-t border-slate-100 bg-slate-50/60 flex items-center justify-between">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="relative shrink-0">
-                  <img
-                    src={user.avatarUrl || 'https://api.dicebear.com/7.x/initials/svg?seed=User'}
-                    alt={user.name}
-                    className="h-8 w-8 rounded-xl object-cover border border-slate-200 shadow-2xs"
-                  />
-                  <span className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-white" />
-                </div>
-                <div className="truncate">
-                  <p className="text-xs font-bold text-slate-800 truncate leading-tight">{user.name}</p>
-                  <p className="text-[10px] text-emerald-600 font-medium truncate flex items-center gap-1">
-                    <span>OAuth Session Active</span>
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  logout();
-                  router.push('/login');
-                }}
-                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors shrink-0"
-                title="Sign Out"
-              >
-                <LogOut className="h-4 w-4" />
-              </button>
-            </div>
           </aside>
 
           {/* ─────────────────────────────────────────────────────────────
-              2. EMAIL FEED STREAM (Chat / Slack Channel caliber)
+              2. FOCUSED MAIL WORKSPACE & CANVAS (Identical card geometry to Chat)
           ───────────────────────────────────────────────────────────── */}
-          <div className="w-72 sm:w-80 lg:w-88 xl:w-96 border-r border-slate-200/80 bg-white flex flex-col shrink-0 overflow-hidden">
-            {/* Feed Header */}
-            {/* Feed Header */}
-            <header className="h-16 px-4 border-b border-slate-200/80 bg-white flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="h-9 w-9 rounded-xl bg-indigo-50 border border-indigo-200/80 flex items-center justify-center text-indigo-600 shadow-2xs shrink-0">
-                  {mailFolder === 'SENT' ? (
-                    <Send className="h-4.5 w-4.5" />
-                  ) : mailFolder === 'STARRED' ? (
-                    <Star className="h-4.5 w-4.5 text-amber-500 fill-amber-400" />
-                  ) : mailFolder === 'DRAFTS' ? (
-                    <FileText className="h-4.5 w-4.5" />
-                  ) : mailFolder === 'TRASH' ? (
-                    <Trash2 className="h-4.5 w-4.5" />
-                  ) : (
-                    <Inbox className="h-4.5 w-4.5" />
-                  )}
-                </div>
-                <div className="flex flex-col min-w-0 justify-center">
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-black text-slate-900 text-sm tracking-tight capitalize leading-tight">
-                      {mailFolder === 'SENT' ? 'Sent' : mailFolder === 'INBOX' ? 'Inbox' : mailFolder.toLowerCase()}
-                    </span>
-                    {mailFolder === 'INBOX' && selectedMailAccount?.unreadCount !== undefined && selectedMailAccount.unreadCount > 0 ? (
-                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-100">
-                        {selectedMailAccount.unreadCount} unread
-                      </span>
-                    ) : (
-                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-600">
-                        {filteredMailMessages.length} {mailFolder === 'SENT' ? 'sent' : ''}
-                      </span>
-                    )}
-                  </div>
-                  <span className="text-[10px] text-slate-400 font-medium truncate">
-                    {selectedMailAccount?.emailAddress || 'Connected Mailbox'}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-1.5 shrink-0">
-                {mailTotalMessages > 0 && (
-                  <div className="flex items-center gap-1 bg-slate-50 border border-slate-200/90 rounded-full px-2 py-0.5 text-[9px] font-bold text-slate-600 shadow-2xs">
-                    <span>
-                      {Math.min((mailPage - 1) * 100 + 1, mailTotalMessages)}–{Math.min(mailPage * 100, mailTotalMessages)} of {mailTotalMessages}
-                    </span>
-                    <div className="flex items-center ml-0.5 border-l border-slate-200 pl-0.5">
-                      <button
-                        type="button"
-                        disabled={mailPage <= 1 || isMailLoading}
-                        onClick={() => loadMailMessages(selectedMailAccountId, mailFolder, mailSearchQuery, mailPage - 1)}
-                        className="p-0.5 hover:text-indigo-600 disabled:opacity-30 disabled:hover:text-slate-400 cursor-pointer"
-                        title="Previous page"
-                      >
-                        <ChevronLeft className="w-3 h-3" />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={mailPage >= mailTotalPages || isMailLoading}
-                        onClick={() => loadMailMessages(selectedMailAccountId, mailFolder, mailSearchQuery, mailPage + 1)}
-                        className="p-0.5 hover:text-indigo-600 disabled:opacity-30 disabled:hover:text-slate-400 cursor-pointer"
-                        title="Next page"
-                      >
-                        <ChevronRight className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Interactive Live Sync Pill Button */}
-                {selectedMailAccount?.isShared && !canManageGroupMail ? (
-                  <div
-                    className="flex items-center gap-1.5 rounded-full bg-slate-100 border border-slate-200/90 px-2.5 py-1 text-[10px] font-semibold text-slate-500 shadow-2xs shrink-0 cursor-default select-none"
-                    title="Group mailbox sync is managed by Workspace Admins & Owners"
-                  >
-                    <Lock className="h-3 w-3 text-slate-400" />
-                    <span>Synced by Admins</span>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => handleSyncMailAccount()}
-                    className="flex items-center gap-1.5 rounded-full bg-emerald-50/90 hover:bg-emerald-100/90 border border-emerald-200/80 px-2.5 py-1 text-[10px] font-bold text-emerald-700 shadow-2xs shrink-0 transition-all active:scale-95 cursor-pointer"
-                    title="Click to sync live emails with Gmail"
-                  >
-                    <span className={`h-1.5 w-1.5 rounded-full bg-emerald-500 ${isMailLoading ? 'animate-ping' : 'animate-pulse'}`} />
-                    <span>{isMailLoading ? 'Syncing...' : 'Live Sync'}</span>
-                  </button>
-                )}
-              </div>
-            </header>
-
-            {/* Action Status Filter Bar (Needs Action vs Done vs All) */}
-            <div className="px-3 py-1.5 border-b border-slate-100 bg-white flex items-center justify-between gap-1 text-xs shrink-0">
-              {mailFolder === 'SENT' ? (
-                <div className="flex items-center gap-1.5 text-slate-600 font-bold text-[11px] px-1.5 py-0.5">
-                  <Send className="w-3 h-3 text-indigo-600" />
-                  <span>Sent Outbox</span>
-                </div>
-              ) : mailFolder === 'DRAFTS' || mailFolder === 'TRASH' ? (
-                <div className="flex items-center gap-1.5 text-slate-500 font-semibold text-[11px] px-1.5 py-0.5">
-                  <span>{mailFolder === 'DRAFTS' ? 'Draft Messages' : 'Deleted Messages'}</span>
-                </div>
-              ) : (
-                <div className="flex items-center gap-1">
-                  {(['unhandled', 'done', 'all'] as const).map((st) => (
-                    <button
-                      key={st}
-                      type="button"
-                      onClick={() => setMailStatusFilter(st)}
-                      className={`px-2 py-1 rounded-lg text-[11px] font-bold capitalize transition-all ${
-                        mailStatusFilter === st
-                          ? st === 'unhandled'
-                            ? 'bg-amber-50 text-amber-800 border border-amber-200 shadow-2xs font-black'
-                            : st === 'done'
-                            ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-2xs font-black'
-                            : 'bg-indigo-50 text-indigo-800 border border-indigo-200 shadow-2xs font-black'
-                          : 'text-slate-400 hover:text-slate-700 hover:bg-slate-50 font-medium'
-                      }`}
-                    >
-                      {st === 'unhandled' ? '⚡ Needs Action' : st === 'done' ? '✅ Done' : 'All'}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <div className="flex items-center gap-1">
-                {(['all', 'unread', 'starred'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => setEmailFilterMode(mode)}
-                    className={`px-1.5 py-0.5 rounded text-[10px] font-semibold capitalize transition-all ${
-                      emailFilterMode === mode
-                        ? 'text-indigo-600 font-bold bg-indigo-50'
-                        : 'text-slate-400 hover:text-slate-600'
-                    }`}
-                  >
-                    {mode}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Reauth / Permission Warning Banner */}
-            {selectedMailAccount?.provider === 'GOOGLE' && selectedMailAccount?.requiresReauth && (
-              <div className="mx-3 my-2 p-2.5 rounded-xl bg-amber-50 border border-amber-200/90 text-amber-900 shadow-2xs flex flex-col gap-2 shrink-0">
-                <div className="flex items-start gap-2">
-                  <span className="text-sm">⚠️</span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-[11px] font-bold text-amber-900 leading-snug">Gmail Sync Permission Required</p>
-                    <p className="text-[10px] text-amber-700 leading-normal">
-                      Google requires permission to read incoming emails for {selectedMailAccount.emailAddress}.
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleConnectEmail('GOOGLE')}
-                  className="w-full py-1.5 px-3 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] shadow-2xs transition-all active:scale-98 cursor-pointer flex items-center justify-center gap-1.5"
-                >
-                  <span>Grant Gmail Permission</span>
-                  <span>→</span>
-                </button>
-              </div>
-            )}
-
-            {/* Email Messages List */}
-            <div className="flex-1 overflow-y-auto p-2 space-y-1.5 divide-y divide-transparent">
-              {isMailLoading ? (
-                <div className="flex flex-col items-center justify-center py-20 gap-3">
-                  <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
-                  <span className="text-xs text-slate-400 font-medium">Syncing mailbox...</span>
-                </div>
-              ) : filteredMailMessages.length === 0 ? (
-                <div className="py-20 px-6 text-center text-slate-400 space-y-3">
-                  <div className="w-12 h-12 rounded-2xl bg-indigo-50 border border-indigo-100 text-indigo-500 flex items-center justify-center mx-auto shadow-2xs">
-                    <Inbox className="w-6 h-6" />
-                  </div>
-                  <div>
-                    <p className="text-xs font-bold text-slate-700">No emails in {mailFolder.toLowerCase()}</p>
-                    <p className="text-[11px] text-slate-400 mt-1">
-                      {mailStatusFilter === 'unhandled'
-                        ? 'All caught up! No messages need action.'
-                        : mailStatusFilter === 'done'
-                        ? 'No handled emails yet.'
-                        : 'Your inbox is completely caught up!'}
-                    </p>
-                  </div>
-                  {mailAccounts.length === 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setShowConnectMailModal(true)}
-                      className="mt-2 py-1.5 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all shadow-xs"
-                    >
-                      Connect Your Email (OAuth)
-                    </button>
-                  )}
-                </div>
-              ) : (
-                filteredMailMessages.map((msg) => {
-                  const isSelected = selectedEmail?.id === msg.id;
-                  const isSentFolder = mailFolder === 'SENT' || msg.folder === 'SENT';
-                  const recipientsText = msg.toAddresses && msg.toAddresses.length > 0 ? msg.toAddresses.join(', ') : 'Recipient';
-                  const displayTitle = isSentFolder ? `To: ${recipientsText}` : (msg.fromName || msg.fromAddress);
-                  const senderInitial = (isSentFolder ? (recipientsText.slice(0, 1) || 'R') : (msg.fromName || msg.fromAddress || 'M').slice(0, 1)).toUpperCase();
-                  return (
-                    <div
-                      key={msg.id}
-                      onClick={() => handleSelectEmail(msg)}
-                      className={`p-3 rounded-2xl cursor-pointer transition-all border relative group ${
-                        isSelected
-                          ? 'bg-indigo-50/80 border-indigo-200/90 shadow-2xs'
-                          : !msg.isRead
-                          ? 'bg-white hover:bg-slate-50 border-slate-200/70 shadow-2xs'
-                          : 'bg-transparent hover:bg-slate-50/90 border-transparent'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-2 mb-1.5">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <div className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 shadow-2xs text-[11px] font-black ${
-                            isSentFolder
-                              ? 'bg-gradient-to-tr from-sky-500 to-indigo-600 text-white'
-                              : 'bg-gradient-to-tr from-indigo-500 via-indigo-600 to-purple-600 text-white'
-                          }`}>
-                            {isSentFolder ? <Send className="w-3.5 h-3.5" /> : senderInitial}
-                          </div>
-                          <div className="truncate">
-                            <span className={`text-xs truncate block ${!msg.isRead ? 'font-black text-slate-900' : 'font-semibold text-slate-700'}`}>
-                              {displayTitle}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <span className="text-[10px] text-slate-400 font-medium">
-                            {new Date(msg.receivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-                          </span>
-                          {!msg.isRead && (
-                            <span className="w-2 h-2 rounded-full bg-indigo-600 shrink-0 shadow-2xs" />
-                          )}
-                        </div>
-                      </div>
-
-                      <h4 className={`text-xs leading-snug line-clamp-1 mb-1 ${!msg.isRead ? 'font-bold text-slate-900' : 'font-medium text-slate-700'}`}>
-                        {msg.subject || '(no subject)'}
-                      </h4>
-                      <p className="text-[11px] text-slate-500 line-clamp-2 leading-relaxed font-normal">
-                        {msg.snippet}
-                      </p>
-
-                      <div className="flex items-center justify-between mt-2 pt-1 border-t border-slate-100/60">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          {isSentFolder ? (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-sky-50 border border-sky-200 text-[10px] font-bold text-sky-700">
-                              <Send className="w-2.5 h-2.5" />
-                              <span>Sent</span>
-                            </span>
-                          ) : msg.isHandled ? (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-[10px] font-bold text-emerald-700">
-                              <CheckCircle2 className="w-2.5 h-2.5" />
-                              <span>Done by {msg.handledByName || 'Team'}</span>
-                            </span>
-                          ) : selectedMailAccount?.isShared ? (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-[10px] font-bold text-amber-700">
-                              <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
-                              <span>Needs Action</span>
-                            </span>
-                          ) : null}
-                          {(msg.hasAttachments || (msg.attachments && msg.attachments.length > 0) || (msg.attachmentsJson && msg.attachmentsJson.length > 0)) && (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-indigo-50 border border-indigo-200/60 text-[10px] font-bold text-indigo-700">
-                              <Paperclip className="w-2.5 h-2.5 text-indigo-600" />
-                              <span>
-                                {msg.attachments && msg.attachments.length > 1
-                                  ? `${msg.attachments.length} files`
-                                  : msg.attachmentsJson && msg.attachmentsJson.length > 1
-                                  ? `${msg.attachmentsJson.length} files`
-                                  : 'Attachment'}
-                              </span>
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          {!isSentFolder && (
-                            <button
-                              type="button"
-                              onClick={(e) => handleToggleHandledEmail(msg.id, msg.isHandled, e)}
-                              className={`p-1 rounded-lg transition-colors cursor-pointer ${
-                                msg.isHandled ? 'text-emerald-600 hover:text-slate-400' : 'text-slate-300 hover:text-emerald-600'
-                              }`}
-                              title={msg.isHandled ? 'Reopen (mark as Needs Action)' : 'Mark Done for all group members'}
-                            >
-                              <Check className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={(e) => handleToggleStarEmail(msg.id, e)}
-                            className="p-1 text-slate-300 hover:text-amber-500 transition-colors cursor-pointer"
-                            title={msg.isStarred ? 'Unstar' : 'Star'}
-                          >
-                            <Star className={`w-3.5 h-3.5 ${msg.isStarred ? 'text-amber-400 fill-amber-400' : ''}`} />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-
-          {/* ─────────────────────────────────────────────────────────────
-              3. FOCUSED EMAIL THREAD & INLINE CHAT-STYLE COMPOSER
-          ───────────────────────────────────────────────────────────── */}
-          <main className="flex-1 flex flex-col bg-[#FAFBFC] min-w-0 overflow-hidden relative">
+          <main className="flex-1 bg-white rounded-2xl md:rounded-3xl border border-slate-200/80 shadow-xs flex min-w-0 text-slate-900 relative overflow-hidden">
             {selectedEmail ? (
-              <>
+              /* ── 1. GMAIL FULL-WIDTH EMAIL DETAIL VIEW (Inside Email) ── */
+              <div className="flex-1 flex flex-col bg-white min-w-0 overflow-hidden relative">
                 {/* Email Header Toolbar */}
-                <header className="h-16 px-4 sm:px-6 border-b border-slate-200/80 bg-white/95 backdrop-blur-xl flex items-center justify-between shrink-0 z-10 shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
+                <header className="h-16 px-4 sm:px-6 border-b border-slate-100 bg-white flex items-center justify-between shrink-0 z-10">
                   <div className="flex items-center gap-2.5 min-w-0 mr-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedEmail(null);
+                        setIsReplyingInline(false);
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200/80 text-xs font-bold text-slate-700 hover:text-indigo-600 transition-all shadow-2xs shrink-0 cursor-pointer group"
+                      title="Back to all emails"
+                    >
+                      <ArrowLeft className="w-3.5 h-3.5 text-slate-500 group-hover:text-indigo-600 group-hover:-translate-x-0.5 transition-transform" />
+                      <span>Back to Inbox</span>
+                    </button>
+                    <span className="h-4 w-px bg-slate-200 shrink-0" />
                     <span className="text-xs font-bold text-slate-500 uppercase tracking-wider px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200/60 shrink-0">
                       {selectedEmail.folder === 'SENT' || mailFolder === 'SENT' ? 'Sent' : 'Inbox'}
                     </span>
@@ -7120,7 +6973,7 @@ function WorkspaceShellContent() {
                     <button
                       type="button"
                       onClick={(e) => handleToggleStarEmail(selectedEmail.id, e)}
-                      className="p-2 rounded-xl text-slate-400 hover:text-amber-500 hover:bg-slate-100 transition-colors"
+                      className="p-2 rounded-xl text-slate-400 hover:text-amber-500 hover:bg-slate-100 transition-colors cursor-pointer"
                       title={selectedEmail.isStarred ? 'Unstar' : 'Star'}
                     >
                       <Star className={`w-4 h-4 ${selectedEmail.isStarred ? 'text-amber-400 fill-amber-400' : ''}`} />
@@ -7128,7 +6981,7 @@ function WorkspaceShellContent() {
                     <button
                       type="button"
                       onClick={() => handleToggleReadEmail(selectedEmail.id)}
-                      className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                      className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
                       title="Mark unread"
                     >
                       <Mail className="w-4 h-4" />
@@ -7136,7 +6989,7 @@ function WorkspaceShellContent() {
                     <button
                       type="button"
                       onClick={() => handleDeleteEmail(selectedEmail.id)}
-                      className="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                      className="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
                       title="Move to Trash"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -7144,7 +6997,7 @@ function WorkspaceShellContent() {
                     <button
                       type="button"
                       onClick={() => window.print()}
-                      className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors hidden sm:inline-flex"
+                      className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors hidden sm:inline-flex cursor-pointer"
                       title="Print Email"
                     >
                       <Printer className="w-4 h-4" />
@@ -7160,7 +7013,7 @@ function WorkspaceShellContent() {
                         }
                         setShowShareMailModal(true);
                       }}
-                      className="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100/80 text-indigo-700 font-bold text-xs flex items-center gap-1.5 transition-colors border border-indigo-200/60 shadow-2xs"
+                      className="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100/80 text-indigo-700 font-bold text-xs flex items-center gap-1.5 transition-colors border border-indigo-200/60 shadow-2xs cursor-pointer"
                       title="Share email discussion into a chat channel"
                     >
                       <Share2 className="w-3.5 h-3.5" />
@@ -7172,7 +7025,7 @@ function WorkspaceShellContent() {
                       onClick={() => {
                         setIsReplyingInline(true);
                       }}
-                      className="px-3 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-xs font-semibold text-slate-700 flex items-center gap-1.5 transition-colors"
+                      className="px-3 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-xs font-semibold text-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer"
                     >
                       <Reply className="w-3.5 h-3.5" />
                       <span className="hidden sm:inline">Reply</span>
@@ -7189,7 +7042,7 @@ function WorkspaceShellContent() {
                         });
                         setShowComposeMailModal(true);
                       }}
-                      className="px-3 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-xs font-semibold text-slate-700 flex items-center gap-1.5 transition-colors"
+                      className="px-3 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-xs font-semibold text-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer"
                     >
                       <Forward className="w-3.5 h-3.5" />
                       <span className="hidden sm:inline">Forward</span>
@@ -7197,517 +7050,341 @@ function WorkspaceShellContent() {
                   </div>
                 </header>
 
-                {/* Email Reading Thread View */}
-                <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
-                  {/* Shared Group Mailbox Banner */}
-                  {selectedMailAccount?.isShared && (
-                    <div className="p-3.5 bg-indigo-50/70 border border-indigo-200/80 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-xs text-indigo-900 shadow-2xs">
-                      <div className="flex items-center gap-2">
-                        <Users className="w-4 h-4 text-indigo-600 shrink-0" />
-                        <span className="font-semibold">
-                          Shared Group Mailbox linked to <span className="font-bold underline">#{selectedMailAccount.channelName || 'channel'}</span>
-                        </span>
-                        {selectedMailAccount.isAdminMaster && (
-                          <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-black uppercase">
-                            👑 Workspace Admin Master View
+                {/* Email Reading Thread View (Full-Width Gmail Layout) */}
+                <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 space-y-6">
+                  <div className="max-w-5xl mx-auto space-y-6">
+                    {/* Shared Group Mailbox Banner */}
+                    {selectedMailAccount?.isShared && (
+                      <div className="p-3.5 bg-indigo-50/70 border border-indigo-200/80 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-xs text-indigo-900 shadow-2xs">
+                        <div className="flex items-center gap-2">
+                          <Users className="w-4 h-4 text-indigo-600 shrink-0" />
+                          <span className="font-semibold">
+                            Shared Group Mailbox linked to <span className="font-bold underline">#{selectedMailAccount.channelName || 'channel'}</span>
                           </span>
-                        )}
-                      </div>
-                      <div className="text-[11px] font-medium text-indigo-700 flex items-center gap-2">
-                        {selectedEmail.isHandled ? (
-                          <span className="flex items-center gap-1 text-emerald-700 font-bold bg-white px-2 py-0.5 rounded-md border border-emerald-200">
-                            <CheckCircle2 className="w-3.5 h-3.5" /> Done by {selectedEmail.handledByName || 'Team'}
-                          </span>
-                        ) : (
-                          <span className="flex items-center gap-1 text-amber-700 font-bold bg-white px-2 py-0.5 rounded-md border border-amber-200">
-                            <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
-                            Needs Action by any group member
-                          </span>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => handleToggleHandledEmail(selectedEmail.id, selectedEmail.isHandled)}
-                          className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] transition-all cursor-pointer shadow-2xs"
-                        >
-                          {selectedEmail.isHandled ? 'Reopen' : 'Mark as Done'}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Message Thread Card */}
-                  <div className="bg-white rounded-3xl border border-slate-200/80 shadow-sm p-6 sm:p-8 space-y-6">
-                    {/* Subject Line & Badges */}
-                    <div className="border-b border-slate-100 pb-5">
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-3 flex-wrap">
-                          <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight leading-snug">
-                            {selectedEmail.subject || '(no subject)'}
-                          </h1>
-                          <span className="px-2.5 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider bg-slate-100 text-slate-700 border border-slate-200">
-                            {selectedEmail.folder === 'SENT' || mailFolder === 'SENT' ? 'Sent' : 'Inbox'}
-                          </span>
-                          {selectedMailAccount?.isShared && (
-                            <span className="px-2.5 py-0.5 rounded text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                              #{selectedMailAccount.channelName || 'group'}
+                          {selectedMailAccount.isAdminMaster && (
+                            <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-black uppercase">
+                              👑 Workspace Admin Master View
                             </span>
                           )}
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => window.print()}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors shrink-0"
-                          title="Print email"
-                        >
-                          <Printer className="w-4 h-4" />
-                        </button>
+                        <div className="text-[11px] font-medium text-indigo-700 flex items-center gap-2">
+                          {selectedEmail.isHandled ? (
+                            <span className="flex items-center gap-1 text-emerald-700 font-bold bg-white px-2 py-0.5 rounded-md border border-emerald-200">
+                              <CheckCircle2 className="w-3.5 h-3.5" /> Done by {selectedEmail.handledByName || 'Team'}
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1 text-amber-700 font-bold bg-white px-2 py-0.5 rounded-md border border-amber-200">
+                              <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+                              Needs Action by any group member
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleToggleHandledEmail(selectedEmail.id, selectedEmail.isHandled)}
+                            className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] transition-all cursor-pointer shadow-2xs"
+                          >
+                            {selectedEmail.isHandled ? 'Reopen' : 'Mark as Done'}
+                          </button>
+                        </div>
                       </div>
+                    )}
 
-                      {/* Gmail-Standard Sender & Recipient Information */}
-                      <div className="flex flex-wrap items-start justify-between gap-4 mt-5 pt-1">
-                        <div className="flex items-start gap-3.5 min-w-0">
-                          {/* Sender Avatar */}
-                          <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shadow-2xs shrink-0 ${
-                            selectedEmail.folder === 'SENT' || mailFolder === 'SENT'
-                              ? 'bg-gradient-to-tr from-sky-500 to-indigo-600 text-white'
-                              : 'bg-gradient-to-tr from-indigo-600 via-indigo-700 to-purple-600 text-white'
-                          }`}>
-                            {selectedEmail.folder === 'SENT' || mailFolder === 'SENT' ? (
-                              <Send className="w-4 h-4" />
-                            ) : (
-                              (selectedEmail.fromName || selectedEmail.fromAddress || 'M').slice(0, 1).toUpperCase()
+                    {/* Message Thread Card */}
+                    <div className="bg-white rounded-3xl border border-slate-200/80 shadow-sm p-6 sm:p-8 space-y-6">
+                      {/* Subject Line & Badges */}
+                      <div className="border-b border-slate-100 pb-5">
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="flex items-center gap-3 flex-wrap">
+                            <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight leading-snug">
+                              {selectedEmail.subject || '(no subject)'}
+                            </h1>
+                            <span className="px-2.5 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider bg-slate-100 text-slate-700 border border-slate-200">
+                              {selectedEmail.folder === 'SENT' || mailFolder === 'SENT' ? 'Sent' : 'Inbox'}
+                            </span>
+                            {selectedMailAccount?.isShared && (
+                              <span className="px-2.5 py-0.5 rounded text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                #{selectedMailAccount.channelName || 'group'}
+                              </span>
                             )}
                           </div>
+                          <button
+                            type="button"
+                            onClick={() => window.print()}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors shrink-0"
+                            title="Print email"
+                          >
+                            <Printer className="w-4 h-4" />
+                          </button>
+                        </div>
 
-                          <div className="relative min-w-0">
-                            <div className="flex items-baseline gap-2 flex-wrap">
-                              <span className="text-sm font-bold text-slate-900">
-                                {selectedEmail.folder === 'SENT' || mailFolder === 'SENT'
-                                  ? selectedEmail.fromName || selectedEmail.fromAddress
-                                  : selectedEmail.fromName || selectedEmail.fromAddress}
-                              </span>
-                              <span className="text-xs text-slate-400 font-normal">
-                                &lt;{selectedEmail.fromAddress}&gt;
-                              </span>
-                            </div>
-
-                            {/* Recipient Dropdown Button (to me ▼ / to recipient ▼) */}
-                            <div className="relative inline-block mt-0.5">
-                              <button
-                                type="button"
-                                onClick={() => setShowEmailDetailsModal(!showEmailDetailsModal)}
-                                className="inline-flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-900 font-medium py-0.5 px-1.5 rounded hover:bg-slate-100 transition-colors cursor-pointer select-none"
-                              >
-                                <span>
-                                  to {selectedEmail.folder === 'SENT' || mailFolder === 'SENT'
-                                    ? (selectedEmail.toAddresses[0] || 'recipient')
-                                    : 'me'}
-                                </span>
-                                <ChevronDown className="w-3 h-3 text-slate-400" />
-                              </button>
-
-                              {/* Google Gmail Metadata Details Popover */}
-                              {showEmailDetailsModal && (
-                                <div className="absolute top-full left-0 mt-1.5 w-80 sm:w-96 p-4 bg-white rounded-2xl shadow-xl border border-slate-200/90 z-30 text-xs space-y-2 animate-in fade-in zoom-in-95">
-                                  <div className="grid grid-cols-[68px_1fr] gap-y-1.5 gap-x-2 text-slate-600">
-                                    <span className="text-slate-400 font-medium text-right">from:</span>
-                                    <span className="text-slate-900 font-semibold truncate">
-                                      {selectedEmail.fromName || selectedEmail.fromAddress} &lt;{selectedEmail.fromAddress}&gt;
-                                    </span>
-                                    <span className="text-slate-400 font-medium text-right">to:</span>
-                                    <span className="text-slate-900 break-words">{selectedEmail.toAddresses.join(', ')}</span>
-                                    {selectedEmail.ccAddresses && selectedEmail.ccAddresses.length > 0 && (
-                                      <>
-                                        <span className="text-slate-400 font-medium text-right">cc:</span>
-                                        <span className="text-slate-900 break-words">{selectedEmail.ccAddresses.join(', ')}</span>
-                                      </>
-                                    )}
-                                    <span className="text-slate-400 font-medium text-right">date:</span>
-                                    <span className="text-slate-900">
-                                      {new Date(selectedEmail.receivedAt).toLocaleString([], { dateStyle: 'full', timeStyle: 'short' })}
-                                    </span>
-                                    <span className="text-slate-400 font-medium text-right">subject:</span>
-                                    <span className="text-slate-900 font-medium">{selectedEmail.subject || '(no subject)'}</span>
-                                    <span className="text-slate-400 font-medium text-right">security:</span>
-                                    <span className="text-emerald-700 font-medium flex items-center gap-1">
-                                      <Lock className="w-3 h-3" /> Standard encryption (TLS)
-                                    </span>
-                                  </div>
-                                </div>
+                        {/* Gmail-Standard Sender & Recipient Information */}
+                        <div className="flex flex-wrap items-start justify-between gap-4 mt-5 pt-1">
+                          <div className="flex items-start gap-3.5 min-w-0">
+                            {/* Sender Avatar */}
+                            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm shadow-2xs shrink-0 ${
+                              selectedEmail.folder === 'SENT' || mailFolder === 'SENT'
+                                ? 'bg-gradient-to-tr from-sky-500 to-indigo-600 text-white'
+                                : 'bg-gradient-to-tr from-indigo-600 via-indigo-700 to-purple-600 text-white'
+                            }`}>
+                              {selectedEmail.folder === 'SENT' || mailFolder === 'SENT' ? (
+                                <Send className="w-4 h-4" />
+                              ) : (
+                                (selectedEmail.fromName || selectedEmail.fromAddress || 'M').slice(0, 1).toUpperCase()
                               )}
                             </div>
-                          </div>
-                        </div>
 
-                        {/* Date and Quick Actions */}
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-slate-400 font-medium">
-                            {new Date(selectedEmail.receivedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={(e) => handleToggleStarEmail(selectedEmail.id, e)}
-                            className="p-1.5 text-slate-400 hover:text-amber-500 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-                            title={selectedEmail.isStarred ? 'Unstar' : 'Star'}
-                          >
-                            <Star className={`w-4 h-4 ${selectedEmail.isStarred ? 'text-amber-400 fill-amber-400' : ''}`} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setIsReplyingInline(true)}
-                            className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-                            title="Reply"
-                          >
-                            <Reply className="w-4 h-4" />
-                          </button>
+                            <div className="relative min-w-0">
+                              <div className="flex items-baseline gap-2 flex-wrap">
+                                <span className="text-sm font-bold text-slate-900">
+                                  {selectedEmail.folder === 'SENT' || mailFolder === 'SENT'
+                                    ? selectedEmail.fromName || selectedEmail.fromAddress
+                                    : selectedEmail.fromName || selectedEmail.fromAddress}
+                                </span>
+                                <span className="text-xs text-slate-400 font-normal">
+                                  &lt;{selectedEmail.fromAddress}&gt;
+                                </span>
+                              </div>
+
+                              {/* Recipient Dropdown Button (to me ▼ / to recipient ▼) */}
+                              <div className="relative inline-block mt-0.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setShowEmailDetailsModal(!showEmailDetailsModal)}
+                                  className="inline-flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-900 font-medium py-0.5 px-1.5 rounded hover:bg-slate-100 transition-colors cursor-pointer select-none"
+                                >
+                                  <span>
+                                    to {selectedEmail.folder === 'SENT' || mailFolder === 'SENT'
+                                      ? (selectedEmail.toAddresses[0] || 'recipient')
+                                      : 'me'}
+                                  </span>
+                                  <ChevronDown className="w-3 h-3 text-slate-400" />
+                                </button>
+
+                                {/* Google Gmail Metadata Details Popover */}
+                                {showEmailDetailsModal && (
+                                  <div className="absolute top-full left-0 mt-1.5 w-80 sm:w-96 p-4 bg-white rounded-2xl shadow-xl border border-slate-200/90 z-30 text-xs space-y-2 animate-in fade-in zoom-in-95">
+                                    <div className="grid grid-cols-[68px_1fr] gap-y-1.5 gap-x-2 text-slate-600">
+                                      <span className="text-slate-400 font-medium text-right">from:</span>
+                                      <span className="text-slate-900 font-semibold truncate">
+                                        {selectedEmail.fromName || selectedEmail.fromAddress} &lt;{selectedEmail.fromAddress}&gt;
+                                      </span>
+                                      <span className="text-slate-400 font-medium text-right">to:</span>
+                                      <span className="text-slate-900 break-words">{selectedEmail.toAddresses.join(', ')}</span>
+                                      {selectedEmail.ccAddresses && selectedEmail.ccAddresses.length > 0 && (
+                                        <>
+                                          <span className="text-slate-400 font-medium text-right">cc:</span>
+                                          <span className="text-slate-900 break-words">{selectedEmail.ccAddresses.join(', ')}</span>
+                                        </>
+                                      )}
+                                      <span className="text-slate-400 font-medium text-right">date:</span>
+                                      <span className="text-slate-900">
+                                        {new Date(selectedEmail.receivedAt).toLocaleString([], { dateStyle: 'full', timeStyle: 'short' })}
+                                      </span>
+                                      <span className="text-slate-400 font-medium text-right">subject:</span>
+                                      <span className="text-slate-900 font-medium">{selectedEmail.subject || '(no subject)'}</span>
+                                      <span className="text-slate-400 font-medium text-right">security:</span>
+                                      <span className="text-emerald-700 font-medium flex items-center gap-1">
+                                        <Lock className="w-3 h-3" /> Standard encryption (TLS)
+                                      </span>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Date and Quick Actions */}
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-slate-400 font-medium">
+                              {new Date(selectedEmail.receivedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={(e) => handleToggleStarEmail(selectedEmail.id, e)}
+                              className="p-1.5 text-slate-400 hover:text-amber-500 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                              title={selectedEmail.isStarred ? 'Unstar' : 'Star'}
+                            >
+                              <Star className={`w-4 h-4 ${selectedEmail.isStarred ? 'text-amber-400 fill-amber-400' : ''}`} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setIsReplyingInline(true)}
+                              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                              title="Reply"
+                            >
+                              <Reply className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    {/* Email HTML or Text Body (Isolated & Contrast-Safe) */}
-                    <EmailBodyViewer
-                      key={selectedEmail.id}
-                      emailId={selectedEmail.id}
-                      bodyHtml={selectedEmail.bodyHtml}
-                      bodyText={selectedEmail.bodyText}
-                      snippet={selectedEmail.snippet}
-                      subject={selectedEmail.subject}
-                    />
+                      {/* Email HTML or Text Body (Isolated & Contrast-Safe) */}
+                      <EmailBodyViewer
+                        key={selectedEmail.id}
+                        emailId={selectedEmail.id}
+                        bodyHtml={selectedEmail.bodyHtml}
+                        bodyText={selectedEmail.bodyText}
+                        snippet={selectedEmail.snippet}
+                        subject={selectedEmail.subject}
+                      />
 
-                    {/* Attachments Section - Gmail Caliber with Real Image Previews & Document Chips */}
-                    {(() => {
-                      const currentAtts: Array<{ fileName: string; fileUrl: string; fileSize?: number; contentType?: string }> =
-                        (selectedEmail.attachments && selectedEmail.attachments.length > 0
-                          ? selectedEmail.attachments
-                          : selectedEmail.attachmentsJson) || [];
-                      if (currentAtts.length === 0) return null;
+                      {/* Attachments Section - Gmail Caliber with Real Image Previews & Document Chips */}
+                      {(() => {
+                        const currentAtts: Array<{ fileName: string; fileUrl: string; fileSize?: number; contentType?: string }> =
+                          (selectedEmail.attachments && selectedEmail.attachments.length > 0
+                            ? selectedEmail.attachments
+                            : selectedEmail.attachmentsJson) || [];
+                        if (currentAtts.length === 0) return null;
 
-                      return (
-                        <div className="pt-6 border-t border-slate-100 space-y-3">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <Paperclip className="w-4 h-4 text-slate-400" />
-                              <h4 className="text-xs font-bold text-slate-700 tracking-wide">
-                                {currentAtts.length} {currentAtts.length === 1 ? 'Attachment' : 'Attachments'}
-                              </h4>
+                        return (
+                          <div className="pt-6 border-t border-slate-100 space-y-3">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <Paperclip className="w-4 h-4 text-slate-400" />
+                                <h4 className="text-xs font-bold text-slate-700 tracking-wide">
+                                  {currentAtts.length} {currentAtts.length === 1 ? 'Attachment' : 'Attachments'}
+                                </h4>
+                              </div>
+                              <span className="text-[11px] font-medium text-slate-400">
+                                Click any file to preview or download
+                              </span>
                             </div>
-                            <span className="text-[11px] font-medium text-slate-400">
-                              Click any file to preview or download
-                            </span>
-                          </div>
 
-                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                            {currentAtts.map((att: any, idx: number) => {
-                              const isImage =
-                                (att.contentType && att.contentType.startsWith('image/')) ||
-                                /\.(png|jpe?g|webp|gif|svg)$/i.test(att.fileName || '');
-                              const isPdf =
-                                (att.contentType && att.contentType.includes('pdf')) ||
-                                /\.pdf$/i.test(att.fileName || '');
-                              const isDoc =
-                                (att.contentType && att.contentType.includes('word')) ||
-                                /\.(docx?|rtf)$/i.test(att.fileName || '');
-                              const isSheet =
-                                (att.contentType && att.contentType.includes('spreadsheet')) ||
-                                /\.(xlsx?|csv)$/i.test(att.fileName || '');
-                              const isZip =
-                                (att.contentType && att.contentType.includes('zip')) ||
-                                /\.(zip|rar|tar|gz)$/i.test(att.fileName || '');
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                              {currentAtts.map((att: any, idx: number) => {
+                                const isImage =
+                                  (att.contentType && att.contentType.startsWith('image/')) ||
+                                  /\.(png|jpe?g|webp|gif|svg)$/i.test(att.fileName || '');
+                                const isPdf =
+                                  (att.contentType && att.contentType.includes('pdf')) ||
+                                  /\.pdf$/i.test(att.fileName || '');
+                                const isDoc =
+                                  (att.contentType && att.contentType.includes('word')) ||
+                                  /\.(docx?|rtf)$/i.test(att.fileName || '');
+                                const isSheet =
+                                  (att.contentType && att.contentType.includes('spreadsheet')) ||
+                                  /\.(xlsx?|csv)$/i.test(att.fileName || '');
+                                const isZip =
+                                  (att.contentType && att.contentType.includes('zip')) ||
+                                  /\.(zip|rar|tar|gz)$/i.test(att.fileName || '');
 
-                              let fileDownloadUrl = att.fileUrl || '#';
-                              if (fileDownloadUrl !== '#' && !fileDownloadUrl.startsWith('http')) {
-                                fileDownloadUrl = `${API_URL.replace(/\/api$/, '')}${fileDownloadUrl}`;
-                              }
-                              if (fileDownloadUrl !== '#' && token && !fileDownloadUrl.includes('token=')) {
-                                fileDownloadUrl += `${fileDownloadUrl.includes('?') ? '&' : '?'}token=${token}`;
-                              }
+                                let fileDownloadUrl = att.fileUrl || '#';
+                                if (fileDownloadUrl !== '#' && !fileDownloadUrl.startsWith('http')) {
+                                  fileDownloadUrl = `${API_URL.replace(/\/api$/, '')}${fileDownloadUrl}`;
+                                }
 
-                              return (
-                                <div
-                                  key={idx}
-                                  className="group relative rounded-2xl border border-slate-200/90 bg-slate-50/70 hover:bg-white hover:border-indigo-300 hover:shadow-md transition-all overflow-hidden flex flex-col"
-                                >
-                                  {isImage ? (
-                                    <div
-                                      onClick={() =>
-                                        setPreviewAttachment({
-                                          fileName: att.fileName,
-                                          fileUrl: fileDownloadUrl,
-                                          contentType: att.contentType || 'image/png',
-                                          fileSize: att.fileSize,
-                                        })
-                                      }
-                                      className="relative h-32 w-full bg-slate-100 flex items-center justify-center overflow-hidden cursor-pointer group/img"
-                                    >
-                                      <img
-                                        src={fileDownloadUrl}
-                                        alt={att.fileName}
-                                        className="h-full w-full object-cover transition-transform duration-300 group-hover/img:scale-105"
-                                        onError={(e) => {
-                                          (e.target as HTMLElement).style.display = 'none';
-                                        }}
-                                      />
-                                      <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                                        <button
-                                          type="button"
-                                          className="p-2 rounded-xl bg-white/90 text-slate-800 hover:bg-white transition-all shadow-sm"
-                                          title="Preview Image"
-                                        >
-                                          <Eye className="w-4 h-4" />
-                                        </button>
+                                return (
+                                  <div
+                                    key={idx}
+                                    className="p-3 rounded-2xl border border-slate-200/90 hover:border-indigo-300 bg-white hover:bg-indigo-50/20 shadow-2xs transition-all flex flex-col justify-between gap-3 group/att"
+                                  >
+                                    {isImage && att.fileUrl ? (
+                                      <div className="h-32 w-full rounded-xl overflow-hidden bg-slate-50 border border-slate-100 flex items-center justify-center relative">
+                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                        <img
+                                          src={fileDownloadUrl}
+                                          alt={att.fileName}
+                                          className="h-full w-full object-contain group-hover/att:scale-105 transition-transform duration-200"
+                                          loading="lazy"
+                                        />
+                                      </div>
+                                    ) : (
+                                      <div className="h-16 w-full rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400">
+                                        {isPdf ? (
+                                          <FileText className="w-8 h-8 text-rose-500" />
+                                        ) : isDoc ? (
+                                          <FileText className="w-8 h-8 text-blue-500" />
+                                        ) : isSheet ? (
+                                          <FileText className="w-8 h-8 text-emerald-500" />
+                                        ) : isZip ? (
+                                          <Archive className="w-8 h-8 text-amber-500" />
+                                        ) : (
+                                          <File className="w-8 h-8 text-slate-400" />
+                                        )}
+                                      </div>
+                                    )}
+
+                                    <div className="flex items-center justify-between gap-2 min-w-0 pt-1 border-t border-slate-100">
+                                      <div className="min-w-0">
+                                        <p className="text-xs font-bold text-slate-800 truncate" title={att.fileName}>
+                                          {att.fileName}
+                                        </p>
+                                        <p className="text-[10px] text-slate-400 font-medium">
+                                          {att.fileSize ? `${(att.fileSize / 1024).toFixed(2)} KB` : 'Ready to download'}
+                                        </p>
+                                      </div>
+                                      <div className="flex items-center gap-1 shrink-0">
                                         <a
                                           href={fileDownloadUrl}
                                           download={att.fileName}
-                                          onClick={(e) => e.stopPropagation()}
-                                          className="p-2 rounded-xl bg-white/90 text-slate-800 hover:bg-white transition-all shadow-sm"
-                                          title="Download Image"
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                                          title="Download attachment"
                                         >
-                                          <Download className="w-4 h-4" />
+                                          <Download className="w-3.5 h-3.5" />
+                                        </a>
+                                        <a
+                                          href={fileDownloadUrl}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                                          title="Open in new tab"
+                                        >
+                                          <ExternalLink className="w-3.5 h-3.5" />
                                         </a>
                                       </div>
                                     </div>
-                                  ) : (
-                                    <div
-                                      onClick={() => {
-                                        if (isPdf) {
-                                          setPreviewAttachment({
-                                            fileName: att.fileName,
-                                            fileUrl: fileDownloadUrl,
-                                            contentType: 'application/pdf',
-                                            fileSize: att.fileSize,
-                                          });
-                                        } else {
-                                          window.open(fileDownloadUrl, '_blank');
-                                        }
-                                      }}
-                                      className="h-20 bg-gradient-to-tr from-slate-100 to-indigo-50/40 flex items-center justify-center cursor-pointer border-b border-slate-100"
-                                    >
-                                      {isPdf ? (
-                                        <div className="px-3 py-1.5 rounded-xl bg-rose-50 text-rose-600 font-black text-xs border border-rose-200 shadow-2xs flex items-center gap-1.5">
-                                          <FileText className="w-4 h-4" />
-                                          <span>PDF DOCUMENT</span>
-                                        </div>
-                                      ) : isDoc ? (
-                                        <div className="px-3 py-1.5 rounded-xl bg-blue-50 text-blue-600 font-black text-xs border border-blue-200 shadow-2xs flex items-center gap-1.5">
-                                          <FileText className="w-4 h-4" />
-                                          <span>WORD DOCUMENT</span>
-                                        </div>
-                                      ) : isSheet ? (
-                                        <div className="px-3 py-1.5 rounded-xl bg-emerald-50 text-emerald-600 font-black text-xs border border-emerald-200 shadow-2xs flex items-center gap-1.5">
-                                          <BarChart2 className="w-4 h-4" />
-                                          <span>SPREADSHEET</span>
-                                        </div>
-                                      ) : isZip ? (
-                                        <div className="px-3 py-1.5 rounded-xl bg-amber-50 text-amber-700 font-black text-xs border border-amber-200 shadow-2xs flex items-center gap-1.5">
-                                          <Archive className="w-4 h-4" />
-                                          <span>ZIP ARCHIVE</span>
-                                        </div>
-                                      ) : (
-                                        <div className="px-3 py-1.5 rounded-xl bg-slate-200 text-slate-700 font-black text-xs border border-slate-300 shadow-2xs flex items-center gap-1.5">
-                                          <File className="w-4 h-4" />
-                                          <span>FILE</span>
-                                        </div>
-                                      )}
-                                    </div>
-                                  )}
-
-                                  <div className="p-3 flex items-center justify-between gap-2 bg-white">
-                                    <div className="truncate min-w-0">
-                                      <p className="text-xs font-bold text-slate-800 truncate" title={att.fileName}>
-                                        {att.fileName}
-                                      </p>
-                                      <span className="text-[10px] text-slate-400 font-medium">
-                                        {att.fileSize ? formatFileSize(att.fileSize) : 'Attached file'}
-                                      </span>
-                                    </div>
-                                    <div className="flex items-center gap-1 shrink-0">
-                                      <a
-                                        href={fileDownloadUrl}
-                                        download={att.fileName}
-                                        className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer"
-                                        title={`Download ${att.fileName}`}
-                                      >
-                                        <Download className="w-3.5 h-3.5" />
-                                      </a>
-                                      <a
-                                        href={fileDownloadUrl}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
-                                        title="Open in new tab"
-                                      >
-                                        <ExternalLink className="w-3.5 h-3.5" />
-                                      </a>
-                                    </div>
                                   </div>
-                                </div>
-                              );
-                            })}
+                                );
+                              })}
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })()}
+                        );
+                      })()}
 
-                    {/* Gmail-Style Quick Action Buttons */}
-                    <div className="flex items-center gap-3 pt-6 border-t border-slate-100">
-                      <button
-                        type="button"
-                        onClick={() => setIsReplyingInline(true)}
-                        className="inline-flex items-center gap-2 px-6 py-2.5 rounded-full border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs shadow-2xs transition-all active:scale-98 cursor-pointer"
-                      >
-                        <Reply className="w-4 h-4 text-slate-500" />
-                        <span>Reply</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setComposeMailData({
-                            to: '',
-                            cc: '',
-                            subject: `Fwd: ${selectedEmail.subject}`,
-                            body: `\n\n---------- Forwarded message ---------\nFrom: ${selectedEmail.fromName || selectedEmail.fromAddress} <${selectedEmail.fromAddress}>\nDate: ${new Date(selectedEmail.receivedAt).toLocaleString()}\nSubject: ${selectedEmail.subject}\nTo: ${selectedEmail.toAddresses.join(', ')}\n\n${selectedEmail.bodyText || selectedEmail.snippet}`,
-                          });
-                          setShowComposeMailModal(true);
-                        }}
-                        className="inline-flex items-center gap-2 px-6 py-2.5 rounded-full border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs shadow-2xs transition-all active:scale-98 cursor-pointer"
-                      >
-                        <Forward className="w-4 h-4 text-slate-500" />
-                        <span>Forward</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* ─────────────────────────────────────────────────────────────
-                    CHAT-CALIBER INLINE EMAIL REPLY COMPOSER (Bottom Docked)
-                ───────────────────────────────────────────────────────────── */}
-                {isReplyingInline && (
-                  <div className="p-4 sm:p-5 border-t border-slate-200/80 bg-white/95 backdrop-blur-md animate-in slide-in-from-bottom-2 duration-200">
-                    <div className="rounded-2xl border border-slate-200/90 bg-white shadow-xl shadow-slate-200/60 focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-500/20 transition-all overflow-hidden">
-                      {/* Reply Context Banner */}
-                      <div className="flex items-center justify-between px-4 py-2.5 bg-slate-50/80 border-b border-slate-100 text-xs text-slate-500">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <Reply className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
-                          <span className="font-semibold text-slate-700 truncate">
-                            Replying to <span className="font-bold text-indigo-600">{selectedEmail.fromName || selectedEmail.fromAddress}</span>
-                          </span>
-                          {selectedMailAccount?.isShared ? (
-                            <span className="text-[11px] text-indigo-700 font-semibold truncate hidden md:inline bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200/60">
-                              (on behalf of #{selectedMailAccount.channelName || 'group'} • auto-marks Done)
-                            </span>
-                          ) : (
-                            <span className="text-[11px] text-slate-400 truncate hidden md:inline">
-                              ({selectedEmail.fromAddress})
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2">
+                      {/* Gmail Bottom Quick Actions (Reply / Forward) */}
+                      {!isReplyingInline && (
+                        <div className="pt-4 border-t border-slate-100 flex items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={() => setIsReplyingInline(true)}
+                            className="px-5 py-2.5 rounded-2xl border border-slate-200/90 hover:border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-2 transition-all cursor-pointer shadow-2xs"
+                          >
+                            <Reply className="w-4 h-4 text-slate-500" />
+                            <span>Reply</span>
+                          </button>
                           <button
                             type="button"
                             onClick={() => {
                               setComposeMailData({
-                                to: selectedEmail.fromAddress,
+                                to: '',
                                 cc: '',
-                                subject: selectedEmail.subject.startsWith('Re:') ? selectedEmail.subject : `Re: ${selectedEmail.subject}`,
-                                body: inlineReplyText || `\n\n--- On ${new Date(selectedEmail.receivedAt).toLocaleString()}, ${selectedEmail.fromName || selectedEmail.fromAddress} wrote:\n> ${selectedEmail.bodyText || selectedEmail.snippet}`,
+                                subject: `Fwd: ${selectedEmail.subject}`,
+                                body: `\n\n---------- Forwarded message ---------\nFrom: ${selectedEmail.fromName || selectedEmail.fromAddress} <${selectedEmail.fromAddress}>\nDate: ${new Date(selectedEmail.receivedAt).toLocaleString()}\nSubject: ${selectedEmail.subject}\nTo: ${selectedEmail.toAddresses.join(', ')}\n\n${selectedEmail.bodyText || selectedEmail.snippet}`,
                               });
                               setShowComposeMailModal(true);
                             }}
-                            className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 transition-colors flex items-center gap-1 shrink-0"
-                            title="Open in full screen composer modal"
+                            className="px-5 py-2.5 rounded-2xl border border-slate-200/90 hover:border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-2 transition-all cursor-pointer shadow-2xs"
                           >
-                            <ExternalLink className="w-3 h-3" />
-                            <span>Full Editor</span>
+                            <Forward className="w-4 h-4 text-slate-500" />
+                            <span>Forward</span>
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setIsReplyingInline(false);
-                            }}
-                            className="p-1 hover:text-rose-600 text-slate-400 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
-                            title="Discard / Close reply"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Inline Reply Textarea */}
-                      <textarea
-                        value={inlineReplyText}
-                        onChange={(e) => setInlineReplyText(e.target.value)}
-                        onKeyDown={(e) => {
-                          if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                            e.preventDefault();
-                            handleSendInlineReply();
-                          }
-                        }}
-                        autoFocus
-                        placeholder={`Reply to ${selectedEmail.fromName || selectedEmail.fromAddress}... (Press Ctrl+Enter to send)`}
-                        rows={4}
-                        className="w-full p-3.5 bg-transparent resize-none border-none focus:outline-none text-xs sm:text-sm text-slate-800 placeholder-slate-400 font-medium leading-relaxed"
-                      />
-
-                      {/* Attached files in inline reply */}
-                      {inlineReplyAttachments.length > 0 && (
-                        <div className="px-3.5 py-2 bg-slate-50 border-t border-slate-100 flex flex-wrap gap-2">
-                          {inlineReplyAttachments.map((att, idx) => (
-                            <div
-                              key={idx}
-                              className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-slate-700 shadow-2xs"
-                            >
-                              <Paperclip className="w-3 h-3 text-indigo-600" />
-                              <span className="max-w-[140px] truncate">{att.fileName}</span>
-                              <span className="text-[10px] text-slate-400 font-mono">({formatFileSize(att.fileSize)})</span>
-                              <button
-                                type="button"
-                                onClick={() => setInlineReplyAttachments((prev) => prev.filter((_, i) => i !== idx))}
-                                className="p-0.5 hover:text-rose-600 rounded-md transition-colors ml-0.5 cursor-pointer"
-                                title="Remove"
-                              >
-                                <X className="w-3 h-3" />
-                              </button>
-                            </div>
-                          ))}
                         </div>
                       )}
+                    </div>
 
-                      {/* Composer Bottom Toolbar */}
-                      <div className="flex items-center justify-between px-3.5 py-2.5 bg-slate-50/70 border-t border-slate-100">
-                        <div className="flex items-center gap-1.5">
-                          <input
-                            type="file"
-                            multiple
-                            ref={inlineFileInputRef}
-                            className="hidden"
-                            onChange={(e) => {
-                              handleUploadMailAttachment(e.target.files, 'inline');
-                              e.target.value = '';
-                            }}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => inlineFileInputRef.current?.click()}
-                            disabled={isUploadingInlineAttachment}
-                            className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors flex items-center gap-1 text-xs cursor-pointer"
-                            title="Attach files (images, documents, PDFs, etc.)"
-                          >
-                            {isUploadingInlineAttachment ? (
-                              <Loader2 className="h-4 w-4 animate-spin text-indigo-600" />
-                            ) : (
-                              <Paperclip className="h-4 w-4" />
-                            )}
-                            <span className="text-[11px] font-semibold text-slate-600 hidden sm:inline">Attach</span>
-                          </button>
-                          <span className="text-[10px] text-slate-400 font-medium px-2 hidden sm:inline">
-                            Attach files & images • Markdown supported
-                          </span>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] text-slate-400 font-mono hidden sm:inline">
-                            Ctrl + Enter
-                          </span>
+                    {/* Inline Reply Composer Card */}
+                    {isReplyingInline && (
+                      <div className="bg-white rounded-3xl border border-indigo-200 shadow-md p-4 sm:p-6 space-y-4 animate-in fade-in zoom-in-95">
+                        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                          <div className="flex items-center gap-2 text-xs text-slate-600">
+                            <Reply className="w-4 h-4 text-indigo-600" />
+                            <span className="font-bold text-slate-900">
+                              Reply to {selectedEmail.fromName || selectedEmail.fromAddress}
+                            </span>
+                            <span className="text-slate-400">&lt;{selectedEmail.fromAddress}&gt;</span>
+                          </div>
                           <button
                             type="button"
                             onClick={() => {
@@ -7715,48 +7392,488 @@ function WorkspaceShellContent() {
                               setInlineReplyAttachments([]);
                               setIsReplyingInline(false);
                             }}
-                            className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
-                            title="Discard draft"
+                            className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+
+                        {/* Inline Reply Text Area */}
+                        <textarea
+                          rows={4}
+                          value={inlineReplyText}
+                          onChange={(e) => setInlineReplyText(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                              e.preventDefault();
+                              handleSendInlineReply();
+                            }
+                          }}
+                          placeholder="Type your reply here... (Ctrl + Enter to send)"
+                          className="w-full text-xs text-slate-900 placeholder:text-slate-400 bg-slate-50/50 border border-slate-200/90 rounded-2xl p-3.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 resize-none transition-all leading-relaxed"
+                          autoFocus
+                        />
+
+                        {/* Staged Inline Attachments */}
+                        {inlineReplyAttachments.length > 0 && (
+                          <div className="flex flex-wrap gap-2 pt-1">
+                            {inlineReplyAttachments.map((file, idx) => (
+                              <div
+                                key={idx}
+                                className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-indigo-50 border border-indigo-200/80 text-[11px] font-bold text-indigo-800 shadow-2xs"
+                              >
+                                <Paperclip className="w-3 h-3 text-indigo-600" />
+                                <span className="truncate max-w-[140px]">{file.fileName}</span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setInlineReplyAttachments((prev) => prev.filter((_, i) => i !== idx))
+                                  }
+                                  className="p-0.5 hover:text-rose-600 transition-colors ml-0.5 cursor-pointer"
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Inline Composer Action Bar */}
+                        <div className="flex items-center justify-between pt-2">
+                          <div className="flex items-center gap-1">
+                            <label className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl cursor-pointer transition-colors">
+                              <Paperclip className="w-4 h-4" />
+                              <input
+                                type="file"
+                                multiple
+                                className="hidden"
+                                onChange={(e) => handleUploadMailAttachment(e.target.files, 'inline')}
+                              />
+                            </label>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-slate-400 hidden sm:inline">
+                              Ctrl + Enter
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setInlineReplyText('');
+                                setInlineReplyAttachments([]);
+                                setIsReplyingInline(false);
+                              }}
+                              className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer"
+                              title="Discard draft"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={(!inlineReplyText.trim() && inlineReplyAttachments.length === 0) || isSendingMail}
+                              onClick={handleSendInlineReply}
+                              className="py-2 px-5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs shadow-md shadow-indigo-600/25 flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer disabled:cursor-not-allowed"
+                            >
+                              {isSendingMail ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Send className="w-3.5 h-3.5" />
+                              )}
+                              <span>Send</span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* ── 2. GMAIL FULL-WIDTH ALL MAILS LIST VIEW (Only All Mail) ── */
+              <div className="flex-1 flex flex-col bg-white min-w-0 overflow-hidden relative">
+                {/* Full-width Gmail Header Toolbar */}
+                <header className="h-16 px-4 sm:px-6 border-b border-slate-100 bg-white flex items-center justify-between shrink-0 z-10">
+                  {/* Left: Folder Title & Badge */}
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="h-9 w-9 rounded-xl bg-indigo-50 border border-indigo-200/80 flex items-center justify-center text-indigo-600 shadow-2xs shrink-0">
+                      {mailFolder === 'SENT' ? (
+                        <Send className="h-4.5 w-4.5" />
+                      ) : mailFolder === 'STARRED' ? (
+                        <Star className="h-4.5 w-4.5 text-amber-500 fill-amber-400" />
+                      ) : mailFolder === 'DRAFTS' ? (
+                        <FileText className="h-4.5 w-4.5" />
+                      ) : mailFolder === 'TRASH' ? (
+                        <Trash2 className="h-4.5 w-4.5" />
+                      ) : (
+                        <Inbox className="h-4.5 w-4.5" />
+                      )}
+                    </div>
+                    <div className="flex flex-col min-w-0 justify-center">
+                      <div className="flex items-center gap-2">
+                        <span className="font-black text-slate-900 text-sm tracking-tight capitalize leading-tight">
+                          {mailFolder === 'SENT' ? 'Sent' : mailFolder === 'INBOX' ? 'Inbox' : mailFolder.toLowerCase()}
+                        </span>
+                        {mailFolder === 'INBOX' && selectedMailAccount?.unreadCount !== undefined && selectedMailAccount.unreadCount > 0 ? (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-100">
+                            {selectedMailAccount.unreadCount} unread
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-600">
+                            {filteredMailMessages.length} {mailFolder === 'SENT' ? 'sent' : 'emails'}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-medium truncate">
+                        {selectedMailAccount?.emailAddress || 'Connected Mailbox'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Middle: Gmail Category & Filter Tabs */}
+                  <div className="hidden md:flex items-center gap-3">
+                    {mailFolder === 'INBOX' && (
+                      <div className="flex items-center gap-1 bg-slate-50/90 border border-slate-200/80 rounded-xl p-1 shadow-2xs">
+                        {(['unhandled', 'done', 'all'] as const).map((st) => (
+                          <button
+                            key={st}
+                            type="button"
+                            onClick={() => setMailStatusFilter(st)}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-bold capitalize transition-all cursor-pointer ${
+                              mailStatusFilter === st
+                                ? st === 'unhandled'
+                                  ? 'bg-amber-500 text-white shadow-2xs'
+                                  : st === 'done'
+                                  ? 'bg-emerald-600 text-white shadow-2xs'
+                                  : 'bg-indigo-600 text-white shadow-2xs'
+                                : 'text-slate-500 hover:text-slate-900 hover:bg-white/60 font-semibold'
+                            }`}
+                          >
+                            {st === 'unhandled' ? '⚡ Needs Action' : st === 'done' ? '✅ Done' : 'All'}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-1 bg-slate-50/90 border border-slate-200/80 rounded-xl p-1 shadow-2xs">
+                      {(['all', 'unread', 'starred'] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => setEmailFilterMode(mode)}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-semibold capitalize transition-all cursor-pointer ${
+                            emailFilterMode === mode
+                              ? 'text-indigo-700 font-bold bg-white shadow-2xs'
+                              : 'text-slate-400 hover:text-slate-700'
+                          }`}
+                        >
+                          {mode}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Right: Pagination + Interactive Live Sync */}
+                  <div className="flex items-center gap-2 shrink-0">
+                    {mailTotalMessages > 0 && (
+                      <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200/90 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-600 shadow-2xs">
+                        <span>
+                          {Math.min((mailPage - 1) * 100 + 1, mailTotalMessages)}–{Math.min(mailPage * 100, mailTotalMessages)} of {mailTotalMessages}
+                        </span>
+                        <div className="flex items-center ml-1 border-l border-slate-200 pl-1">
+                          <button
+                            type="button"
+                            disabled={mailPage <= 1 || isMailLoading}
+                            onClick={() => loadMailMessages(selectedMailAccountId, mailFolder, mailSearchQuery, mailPage - 1)}
+                            className="p-1 hover:text-indigo-600 disabled:opacity-30 disabled:hover:text-slate-400 cursor-pointer rounded"
+                            title="Previous page"
+                          >
+                            <ChevronLeft className="w-3.5 h-3.5" />
                           </button>
                           <button
                             type="button"
-                            disabled={(!inlineReplyText.trim() && inlineReplyAttachments.length === 0) || isSendingMail}
-                            onClick={handleSendInlineReply}
-                            className="py-2 px-5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs shadow-md shadow-indigo-600/25 flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer disabled:cursor-not-allowed"
+                            disabled={mailPage >= mailTotalPages || isMailLoading}
+                            onClick={() => loadMailMessages(selectedMailAccountId, mailFolder, mailSearchQuery, mailPage + 1)}
+                            className="p-1 hover:text-indigo-600 disabled:opacity-30 disabled:hover:text-slate-400 cursor-pointer rounded"
+                            title="Next page"
                           >
-                            {isSendingMail ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            ) : (
-                              <Send className="w-3.5 h-3.5" />
-                            )}
-                            <span>Send</span>
+                            <ChevronRight className="w-3.5 h-3.5" />
                           </button>
                         </div>
                       </div>
+                    )}
+
+                    {selectedMailAccount?.isShared && !canManageGroupMail ? (
+                      <div
+                        className="flex items-center gap-1.5 rounded-xl bg-slate-100 border border-slate-200/90 px-3 py-1.5 text-xs font-semibold text-slate-500 shadow-2xs shrink-0 cursor-default select-none"
+                        title="Group mailbox sync is managed by Workspace Admins & Owners"
+                      >
+                        <Lock className="h-3.5 w-3.5 text-slate-400" />
+                        <span>Synced by Admins</span>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleSyncMailAccount()}
+                        className="flex items-center gap-1.5 rounded-xl bg-emerald-50/90 hover:bg-emerald-100/90 border border-emerald-200/80 px-3 py-1.5 text-xs font-bold text-emerald-700 shadow-2xs shrink-0 transition-all active:scale-95 cursor-pointer"
+                        title="Click to sync live emails with Gmail"
+                      >
+                        <span className={`h-2 w-2 rounded-full bg-emerald-500 ${isMailLoading ? 'animate-ping' : 'animate-pulse'}`} />
+                        <span>{isMailLoading ? 'Syncing...' : 'Live Sync'}</span>
+                      </button>
+                    )}
+                  </div>
+                </header>
+
+                {/* Mobile Filter Sub-bar */}
+                <div className="md:hidden px-4 py-2 border-b border-slate-100 bg-white flex items-center justify-between gap-2 overflow-x-auto">
+                  <div className="flex items-center gap-1">
+                    {(['unhandled', 'done', 'all'] as const).map((st) => (
+                      <button
+                        key={st}
+                        type="button"
+                        onClick={() => setMailStatusFilter(st)}
+                        className={`px-2 py-1 rounded-lg text-xs font-bold capitalize transition-all ${
+                          mailStatusFilter === st
+                            ? 'bg-indigo-600 text-white'
+                            : 'text-slate-500 hover:bg-slate-100'
+                        }`}
+                      >
+                        {st === 'unhandled' ? '⚡ Needs Action' : st === 'done' ? '✅ Done' : 'All'}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {(['all', 'unread', 'starred'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setEmailFilterMode(mode)}
+                        className={`px-2 py-1 rounded-lg text-xs font-semibold capitalize ${
+                          emailFilterMode === mode ? 'text-indigo-600 font-bold bg-indigo-50' : 'text-slate-400'
+                        }`}
+                      >
+                        {mode}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Reauth / Permission Warning Banner */}
+                {selectedMailAccount?.provider === 'GOOGLE' && selectedMailAccount?.requiresReauth && (
+                  <div className="mx-4 my-2 p-3 rounded-xl bg-amber-50 border border-amber-200/90 text-amber-900 shadow-2xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shrink-0">
+                    <div className="flex items-start gap-2.5">
+                      <span className="text-base">⚠️</span>
+                      <div>
+                        <p className="text-xs font-bold text-amber-900 leading-snug">Gmail Sync Permission Required</p>
+                        <p className="text-[11px] text-amber-700 leading-normal">
+                          Google requires permission to read incoming emails for {selectedMailAccount.emailAddress}.
+                        </p>
+                      </div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => handleConnectEmail('GOOGLE')}
+                      className="py-1.5 px-3.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-2xs transition-all active:scale-98 cursor-pointer shrink-0"
+                    >
+                      Grant Gmail Permission →
+                    </button>
                   </div>
                 )}
-              </>
-            ) : (
-              <div className="flex-1 flex flex-col items-center justify-center p-8 text-slate-400 space-y-4">
-                <div className="w-16 h-16 rounded-3xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 shadow-sm">
-                  <Mail className="w-8 h-8" />
-                </div>
-                <div className="text-center max-w-sm">
-                  <h3 className="text-base font-bold text-slate-800">No message selected</h3>
-                  <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                    Choose an email from the stream on the left to read conversations, preview attachments, or send quick inline replies.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setShowComposeMailModal(true)}
-                    className="mt-4 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md shadow-indigo-200 transition-all inline-flex items-center gap-2"
-                  >
-                    <Pencil className="w-3.5 h-3.5" />
-                    <span>Compose New Email</span>
-                  </button>
+
+                {/* Email Messages Full-Width List (Gmail Aesthetic) */}
+                <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+                  {isMailLoading ? (
+                    <div className="flex flex-col items-center justify-center py-28 gap-3">
+                      <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+                      <span className="text-xs text-slate-400 font-medium">Syncing mailbox...</span>
+                    </div>
+                  ) : filteredMailMessages.length === 0 ? (
+                    <div className="py-24 px-6 text-center text-slate-400 space-y-3">
+                      <div className="w-14 h-14 rounded-2xl bg-indigo-50 border border-indigo-100 text-indigo-500 flex items-center justify-center mx-auto shadow-2xs">
+                        <Inbox className="w-7 h-7" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-slate-700">No emails in {mailFolder.toLowerCase()}</p>
+                        <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                          {mailStatusFilter === 'unhandled'
+                            ? 'All caught up! No messages need action.'
+                            : mailStatusFilter === 'done'
+                            ? 'No handled emails yet.'
+                            : 'Your inbox is completely caught up!'}
+                        </p>
+                      </div>
+                      {mailAccounts.length === 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setShowConnectMailModal(true)}
+                          className="mt-2 py-2 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all shadow-xs cursor-pointer"
+                        >
+                          Connect Your Email (OAuth)
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    filteredMailMessages.map((msg) => {
+                      const isSentFolder = mailFolder === 'SENT' || msg.folder === 'SENT';
+                      const recipientsText = msg.toAddresses && msg.toAddresses.length > 0 ? msg.toAddresses.join(', ') : 'Recipient';
+                      const displayTitle = isSentFolder ? `To: ${recipientsText}` : (msg.fromName || msg.fromAddress);
+                      const senderInitial = (isSentFolder ? (recipientsText.slice(0, 1) || 'R') : (msg.fromName || msg.fromAddress || 'M').slice(0, 1)).toUpperCase();
+
+                      return (
+                        <div
+                          key={msg.id}
+                          onClick={() => handleSelectEmail(msg)}
+                          className={`flex items-center px-4 sm:px-6 py-3 sm:py-3.5 transition-all cursor-pointer group select-none relative ${
+                            !msg.isRead
+                              ? 'bg-white font-bold text-slate-900 shadow-2xs hover:bg-slate-50/90'
+                              : 'bg-slate-50/20 text-slate-700 hover:bg-slate-50/90'
+                          }`}
+                        >
+                          {/* Left Controls: Star & Done check */}
+                          <div className="flex items-center gap-1.5 shrink-0 mr-3.5">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleToggleStarEmail(msg.id, e);
+                              }}
+                              className="p-1 text-slate-300 hover:text-amber-500 transition-colors cursor-pointer rounded"
+                              title={msg.isStarred ? 'Unstar' : 'Star'}
+                            >
+                              <Star className={`w-4 h-4 ${msg.isStarred ? 'text-amber-400 fill-amber-400' : ''}`} />
+                            </button>
+
+                            {!isSentFolder && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleHandledEmail(msg.id, msg.isHandled, e);
+                                }}
+                                className={`p-1 rounded transition-colors cursor-pointer ${
+                                  msg.isHandled ? 'text-emerald-600 hover:text-slate-400' : 'text-slate-300 hover:text-emerald-600'
+                                }`}
+                                title={msg.isHandled ? 'Reopen (mark as Needs Action)' : 'Mark Done for all group members'}
+                              >
+                                <Check className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Sender Identity: Avatar + Name */}
+                          <div className="w-44 sm:w-56 md:w-64 shrink-0 flex items-center gap-2.5 min-w-0 pr-3">
+                            <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 shadow-2xs text-[11px] font-bold ${
+                              isSentFolder
+                                ? 'bg-gradient-to-tr from-sky-500 to-indigo-600 text-white'
+                                : 'bg-gradient-to-tr from-indigo-500 via-indigo-600 to-purple-600 text-white'
+                            }`}>
+                              {isSentFolder ? <Send className="w-3 h-3" /> : senderInitial}
+                            </div>
+                            <span className={`text-xs truncate block ${!msg.isRead ? 'font-bold text-slate-900' : 'font-semibold text-slate-700'}`}>
+                              {displayTitle}
+                            </span>
+                          </div>
+
+                          {/* Subject & Snippet & Badges */}
+                          <div className="flex-1 min-w-0 flex items-center gap-2 overflow-hidden pr-2">
+                            {/* Done / Needs Action / Sent Badges */}
+                            {isSentFolder ? (
+                              <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-sky-50 border border-sky-200 text-[10px] font-bold text-sky-700">
+                                <Send className="w-2.5 h-2.5" />
+                                <span>Sent</span>
+                              </span>
+                            ) : msg.isHandled ? (
+                              <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-[10px] font-bold text-emerald-700">
+                                <CheckCircle2 className="w-2.5 h-2.5" />
+                                <span>Done by {msg.handledByName || 'Team'}</span>
+                              </span>
+                            ) : selectedMailAccount?.isShared ? (
+                              <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-[10px] font-bold text-amber-700">
+                                <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+                                <span>Needs Action</span>
+                              </span>
+                            ) : null}
+
+                            {/* Subject */}
+                            <span className={`text-xs truncate shrink-0 max-w-[240px] sm:max-w-[320px] md:max-w-[420px] ${!msg.isRead ? 'font-bold text-slate-900' : 'font-medium text-slate-700'}`}>
+                              {msg.subject || '(no subject)'}
+                            </span>
+
+                            {/* Dash Separator */}
+                            <span className="text-slate-300 text-xs shrink-0">—</span>
+
+                            {/* Snippet */}
+                            <span className="text-xs text-slate-400 font-normal truncate flex-1 min-w-0">
+                              {msg.snippet}
+                            </span>
+
+                            {/* Attachment Pill */}
+                            {(msg.hasAttachments || (msg.attachments && msg.attachments.length > 0) || (msg.attachmentsJson && msg.attachmentsJson.length > 0)) && (
+                              <span className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200/80 text-[10px] font-bold text-slate-600">
+                                <Paperclip className="w-2.5 h-2.5 text-slate-500" />
+                                <span>
+                                  {msg.attachments && msg.attachments.length > 1
+                                    ? `${msg.attachments.length} files`
+                                    : msg.attachmentsJson && msg.attachmentsJson.length > 1
+                                    ? `${msg.attachmentsJson.length} files`
+                                    : 'Attachment'}
+                                </span>
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Right Controls: Hover Action Buttons & Timestamp */}
+                          <div className="flex items-center gap-1 shrink-0 ml-2">
+                            {/* Hover Action Buttons */}
+                            <div className="hidden group-hover:flex items-center gap-1 bg-white px-1.5 py-0.5 rounded-lg border border-slate-200/90 shadow-2xs">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleReadEmail(msg.id);
+                                }}
+                                className="p-1 text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded transition-colors"
+                                title={msg.isRead ? 'Mark as unread' : 'Mark as read'}
+                              >
+                                <Mail className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteEmail(msg.id);
+                                }}
+                                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors"
+                                title="Move to Trash"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (channels.length > 0 && !shareMailTargetChannelId) {
+                                    setShareMailTargetChannelId(channels[0].id);
+                                  }
+                                  setSelectedEmail(msg);
+                                  setShowShareMailModal(true);
+                                }}
+                                className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-colors"
+                                title="Share in channel"
+                              >
+                                <Share2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
+                            {/* Timestamp */}
+                            <span className="text-[11px] text-slate-400 group-hover:hidden sm:group-hover:inline font-medium text-right w-16 sm:w-20 shrink-0">
+                              {new Date(msg.receivedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
               </div>
             )}
@@ -7874,60 +7991,8 @@ function WorkspaceShellContent() {
           )}
         </div>
 
-        {/* Navigation Items (Image 3 Caliber) */}
-        <div className="px-3 py-2 space-y-1 border-b border-slate-100">
-          <Link
-            href="/workspaces"
-            className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-colors"
-          >
-            <Home className="h-4 w-4 text-slate-400" />
-            <span>Home</span>
-          </Link>
-
-          <button
-            type="button"
-            onClick={() => {
-              handleSwitchAppTab('chat');
-              setShowCalendarView(false);
-              setShowMobileSidebar(false);
-            }}
-            className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all ${
-              !showCalendarView
-                ? 'bg-indigo-50/90 text-indigo-700 shadow-2xs'
-                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-            }`}
-          >
-            <div className="flex items-center gap-3">
-              <MessageSquare className={`h-4 w-4 ${!showCalendarView ? 'text-indigo-600' : 'text-slate-400'}`} />
-              <span>Chat</span>
-            </div>
-            {totalUnreadCount > 0 && (
-              <span className="flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-indigo-600 text-[10px] font-black text-white shadow-xs">
-                {totalUnreadCount}
-              </span>
-            )}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              handleSwitchAppTab('mail');
-              setShowCalendarView(false);
-              setShowMobileSidebar(false);
-            }}
-            className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-all"
-          >
-            <div className="flex items-center gap-3">
-              <Mail className="h-4 w-4 text-slate-400" />
-              <span>Mail Studio</span>
-            </div>
-            {totalUnreadEmails > 0 && (
-              <span className="flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-gradient-to-r from-indigo-600 to-purple-600 text-[10px] font-black text-white shadow-xs">
-                {totalUnreadEmails}
-              </span>
-            )}
-          </button>
-
+        {/* Navigation Items */}
+        <div className="px-3 py-2 border-b border-slate-100 space-y-0.5">
           <button
             type="button"
             onClick={() => {
@@ -7935,13 +8000,13 @@ function WorkspaceShellContent() {
               setActiveThreadParent(null);
               setShowMobileSidebar(false);
             }}
-            className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold transition-all ${
+            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
               showCalendarView
                 ? 'bg-indigo-50/90 text-indigo-700 shadow-2xs font-bold'
                 : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
             }`}
           >
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2.5">
               <Calendar className={`h-4 w-4 ${showCalendarView ? 'text-indigo-600' : 'text-slate-400'}`} />
               <span>Calendar & Meetings</span>
             </div>
@@ -7953,11 +8018,19 @@ function WorkspaceShellContent() {
               loadWorkspaceRecordings();
               setShowRecordingsModal(true);
             }}
-            className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-colors"
+            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-colors"
           >
             <Folder className="h-4 w-4 text-slate-400" />
             <span>Files</span>
           </button>
+
+          <Link
+            href="/workspaces"
+            className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-colors"
+          >
+            <Home className="h-4 w-4 text-slate-400" />
+            <span>All Workspaces</span>
+          </Link>
         </div>
 
         {/* Scrollable Navigation Sections */}
@@ -8263,186 +8336,6 @@ function WorkspaceShellContent() {
           </div>
         </div>
 
-        {/* Unified Sidebar Footer: User Profile, Presence Popover & Settings */}
-        <div className="p-3 border-t border-slate-100 bg-slate-50/60 relative">
-          <div className="flex items-center justify-between gap-2">
-            <button
-              onClick={() => setShowPresenceMenu(!showPresenceMenu)}
-              className="flex-1 flex items-center gap-2.5 p-1.5 rounded-xl hover:bg-white hover:shadow-2xs transition-all text-left min-w-0"
-              title="Change status or sign out"
-            >
-              <div className="relative shrink-0">
-                <div className="h-9 w-9 rounded-full ring-2 ring-slate-200 overflow-hidden bg-slate-100 flex items-center justify-center shadow-2xs">
-                  <img
-                    src={user.avatarUrl || 'https://api.dicebear.com/7.x/initials/svg?seed=User'}
-                    alt={user.name}
-                    className="h-full w-full object-cover"
-                  />
-                </div>
-                <span
-                  className={`absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full ring-2 ring-white shadow-xs flex items-center justify-center pointer-events-none ${
-                    userPresence === 'AWAY'
-                      ? 'bg-amber-400'
-                      : userPresence === 'BUSY'
-                      ? 'bg-rose-500'
-                      : userPresence === 'OFFLINE'
-                      ? 'bg-slate-400'
-                      : 'bg-emerald-500'
-                  }`}
-                >
-                  {userPresence === 'BUSY' && (
-                    <span className="h-0.5 w-1.5 bg-white rounded-full" />
-                  )}
-                </span>
-              </div>
-            <div className="flex flex-col min-w-0 flex-1">
-              <span className="font-bold text-xs text-slate-800 truncate">{user.name}</span>
-              <span className="text-[10px] text-slate-400 truncate flex items-center gap-1 font-medium">
-                <span
-                  className={`h-1.5 w-1.5 rounded-full ${
-                    userPresence === 'AWAY'
-                      ? 'bg-amber-400'
-                      : userPresence === 'BUSY'
-                      ? 'bg-rose-500'
-                      : userPresence === 'OFFLINE'
-                      ? 'bg-slate-300'
-                      : 'bg-emerald-500'
-                  }`}
-                />
-                <span>
-                  {userPresence === 'AWAY'
-                    ? 'Away'
-                    : userPresence === 'BUSY'
-                    ? 'Busy'
-                    : userPresence === 'OFFLINE'
-                    ? 'Offline'
-                    : 'Active'}
-                </span>
-              </span>
-            </div>
-          </button>
-
-          <button
-            onClick={() => {
-              logout();
-              router.push('/login');
-            }}
-            title="Sign Out"
-            className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors shrink-0"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
-        </div>
-
-        {/* User Presence Menu Popover */}
-        {showPresenceMenu && (
-          <div className="absolute bottom-full left-3 right-3 mb-2 rounded-2xl bg-white border border-slate-200/90 shadow-2xl p-2.5 z-50 text-xs animate-in slide-in-from-bottom-2 duration-150 select-none">
-            <div className="px-3 py-2 border-b border-slate-100 mb-1">
-              <p className="font-bold text-slate-900 truncate">{user.name}</p>
-              <p className="text-[10px] text-slate-400 truncate font-mono">{user.email}</p>
-            </div>
-
-            {/* Edit Profile Action */}
-            <button
-              type="button"
-              onClick={() => {
-                setShowPresenceMenu(false);
-                setEditName(user.name);
-                setEditAvatarUrl(user.avatarUrl || '');
-                setProfileSuccessMsg(null);
-                setProfileErrorMsg(null);
-                setShowEditProfileModal(true);
-              }}
-              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left font-bold text-slate-700 hover:text-indigo-600 hover:bg-indigo-50/60 transition-all mb-1 border border-transparent hover:border-indigo-100"
-            >
-              <Pencil className="h-4 w-4 text-indigo-600" />
-              <span>Edit Profile & Photo</span>
-            </button>
-
-            <div className="h-px bg-slate-100 my-1" />
-
-            <div className="space-y-0.5 py-1">
-              <span className="text-[10px] uppercase font-bold text-slate-400 px-3 py-1 block">
-                My Status (Zoom Style)
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  handleUpdatePresence('ONLINE');
-                  setShowPresenceMenu(false);
-                }}
-                className={`w-full flex items-center justify-between px-3 py-1.5 rounded-xl text-left transition-colors ${
-                  userPresence === 'ONLINE'
-                    ? 'bg-emerald-50 text-emerald-800 font-bold'
-                    : 'hover:bg-slate-50 text-slate-700'
-                }`}
-              >
-                <div className="flex items-center gap-2.5">
-                  <span className="h-3 w-3 rounded-full bg-emerald-500 ring-2 ring-white shadow-2xs" />
-                  <span>Available (Online)</span>
-                </div>
-                {userPresence === 'ONLINE' && <Check className="h-3.5 w-3.5 text-emerald-600" />}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  handleUpdatePresence('BUSY');
-                  setShowPresenceMenu(false);
-                }}
-                className={`w-full flex items-center justify-between px-3 py-1.5 rounded-xl text-left transition-colors ${
-                  userPresence === 'BUSY'
-                    ? 'bg-rose-50 text-rose-800 font-bold'
-                    : 'hover:bg-slate-50 text-slate-700'
-                }`}
-              >
-                <div className="flex items-center gap-2.5">
-                  <span className="h-3 w-3 rounded-full bg-rose-500 ring-2 ring-white shadow-2xs flex items-center justify-center">
-                    <span className="h-0.5 w-1.5 bg-white rounded-full" />
-                  </span>
-                  <span>Busy (Do Not Disturb)</span>
-                </div>
-                {userPresence === 'BUSY' && <Check className="h-3.5 w-3.5 text-rose-600" />}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  handleUpdatePresence('AWAY');
-                  setShowPresenceMenu(false);
-                }}
-                className={`w-full flex items-center justify-between px-3 py-1.5 rounded-xl text-left transition-colors ${
-                  userPresence === 'AWAY'
-                    ? 'bg-amber-50 text-amber-800 font-bold'
-                    : 'hover:bg-slate-50 text-slate-700'
-                }`}
-              >
-                <div className="flex items-center gap-2.5">
-                  <span className="h-3 w-3 rounded-full bg-amber-400 ring-2 ring-white shadow-2xs" />
-                  <span>Away</span>
-                </div>
-                {userPresence === 'AWAY' && <Check className="h-3.5 w-3.5 text-amber-600" />}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  handleUpdatePresence('OFFLINE');
-                  setShowPresenceMenu(false);
-                }}
-                className={`w-full flex items-center justify-between px-3 py-1.5 rounded-xl text-left transition-colors ${
-                  userPresence === 'OFFLINE'
-                    ? 'bg-slate-100 text-slate-800 font-bold'
-                    : 'hover:bg-slate-50 text-slate-700'
-                }`}
-              >
-                <div className="flex items-center gap-2.5">
-                  <span className="h-3 w-3 rounded-full bg-slate-400 ring-2 ring-white shadow-2xs" />
-                  <span>Invisible</span>
-                </div>
-                {userPresence === 'OFFLINE' && <Check className="h-3.5 w-3.5 text-slate-600" />}
-              </button>
-            </div>
-          </div>
-        )}
-        </div>
       </aside>
 
       {/* ─────────────────────────────────────────────────────────────
@@ -8607,6 +8500,31 @@ function WorkspaceShellContent() {
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     )}
+
+                    {/* Cross-Module Bridge: Linked Group Mailbox Badge */}
+                    {activeChannel && (() => {
+                      const linkedMailAcc = mailAccounts.find((a) => a.channelId === activeChannel.id || a.channelName === activeChannel.name);
+                      if (!linkedMailAcc) return null;
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedMailAccountId(linkedMailAcc.id);
+                            handleSwitchAppTab('mail');
+                          }}
+                          className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[11px] font-bold border border-indigo-200/80 transition-all cursor-pointer shadow-2xs shrink-0 ml-1"
+                          title={`Open linked group mailbox (${linkedMailAcc.emailAddress}) in Mail Studio`}
+                        >
+                          <Mail className="w-3 h-3 text-indigo-600 shrink-0" />
+                          <span className="font-mono truncate max-w-[140px]">{linkedMailAcc.emailAddress}</span>
+                          {linkedMailAcc.unreadCount !== undefined && linkedMailAcc.unreadCount > 0 && (
+                            <span className="px-1 py-0.1 rounded-full bg-indigo-600 text-white text-[9px] font-black shrink-0">
+                              {linkedMailAcc.unreadCount}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })()}
                   </div>
                   {activeChannel?.topic && (
                     <span
@@ -8742,28 +8660,6 @@ function WorkspaceShellContent() {
               >
                 <Video className="h-4 w-4 shrink-0" />
                 <span className="hidden sm:inline">Team Meeting</span>
-              </button>
-            )}
-
-            {/* Audio Huddle Button with Live Waves */}
-            {!activeRecipient && !showCalendarView && (
-              <button
-                type="button"
-                onClick={() => setHuddleActive(!huddleActive)}
-                className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold border transition-all shrink-0 ${
-                  huddleActive
-                    ? 'bg-emerald-50 text-emerald-700 border-emerald-300 shadow-xs'
-                    : 'bg-emerald-50/70 hover:bg-emerald-100/80 text-emerald-700 border-emerald-200'
-                }`}
-                title="Toggle Audio Huddle"
-              >
-                <Radio className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
-                <span className="hidden sm:inline">{huddleActive ? 'Huddle Live' : 'Start Huddle'}</span>
-                <span className="flex items-center gap-0.5 ml-0.5">
-                  <span className="h-2 w-0.5 bg-emerald-500 animate-pulse" />
-                  <span className="h-3 w-0.5 bg-emerald-500 animate-pulse delay-75" />
-                  <span className="h-1.5 w-0.5 bg-emerald-500 animate-pulse delay-150" />
-                </span>
               </button>
             )}
 
