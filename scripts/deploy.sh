@@ -50,13 +50,6 @@ npx prisma db push --skip-generate
 echo "Building NestJS backend..."
 npm run build
 
-echo "Restarting backend with PM2..."
-if pm2 describe chat-backend > /dev/null 2>&1; then
-    pm2 restart chat-backend --update-env
-else
-    pm2 start dist/main.js --name "chat-backend"
-fi
-
 # 3. Build & Deploy Frontend (Port 3005)
 echo "[3/4] Deploying Frontend..."
 cd "$APP_DIR/frontend"
@@ -75,15 +68,11 @@ npm install --legacy-peer-deps --prefer-offline --no-audit
 echo "Building Next.js frontend..."
 npm run build
 
-echo "Restarting frontend with PM2 on port 3005..."
-if pm2 describe chat-frontend > /dev/null 2>&1; then
-    pm2 restart chat-frontend --update-env
-else
-    pm2 start npm --name "chat-frontend" -- start -- -p 3005
-fi
-
-# 4. Save PM2 state & verify
-echo "[4/4] Saving PM2 state..."
+# 4. Start / Reload PM2 processes via ecosystem.config.cjs
+echo "[4/4] Starting / Reloading PM2 processes via ecosystem.config.cjs..."
+cd "$APP_DIR"
+pm2 delete chat-frontend chat-backend 2>/dev/null || true
+pm2 start ecosystem.config.cjs
 pm2 save
 
 echo "=================================================="

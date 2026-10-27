@@ -11,7 +11,7 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   const configService = app.get(ConfigService);
-  const port = configService.get<number>('port', 3001);
+  const port = process.env.PORT ? parseInt(process.env.PORT, 10) : configService.get<number>('port', 3006);
   const frontendUrl = configService.get<string>('frontendUrl', 'http://localhost:3000');
 
   // Ensure uploads directory exists
