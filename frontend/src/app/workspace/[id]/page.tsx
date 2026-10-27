@@ -6951,17 +6951,19 @@ function WorkspaceShellContent() {
                                   {acc.unreadCount}
                                 </span>
                               )}
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDisconnectAccount(acc.id);
-                                }}
-                                className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all cursor-pointer"
-                                title="Disconnect account"
-                              >
-                                <Trash2 className="h-3 w-3" />
-                              </button>
+                              {canManageGroupMail && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleDisconnectAccount(acc.id);
+                                  }}
+                                  className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-all cursor-pointer"
+                                  title="Disconnect group mailbox (Admins & Owners)"
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </button>
+                              )}
                             </div>
                           </div>
                         );
