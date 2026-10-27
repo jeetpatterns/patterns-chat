@@ -45,7 +45,7 @@ npm install --legacy-peer-deps --prefer-offline --no-audit
 
 echo "Generating Prisma Client and syncing DB schema..."
 npx prisma generate
-npx prisma db push --skip-generate
+npx prisma db push --skip-generate --accept-data-loss
 
 echo "Building NestJS backend..."
 npm run build

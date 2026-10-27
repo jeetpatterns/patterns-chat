@@ -1162,11 +1162,15 @@ export class MailService implements OnModuleInit {
     const matchesDomain = (addr: string) => {
       if (!addr) return false;
       const lower = addr.trim().toLowerCase();
+      const match = lower.match(/<([^>]+)>/);
+      const emailOnly = match ? match[1].trim() : lower;
+      const domainPart = emailOnly.includes('@') ? emailOnly.split('@')[1] : emailOnly;
+
       return cleanDomains.some((dom) => {
         return (
-          lower === dom ||
-          lower.endsWith(`@${dom}`) ||
-          lower.includes(`@${dom}`)
+          domainPart === dom ||
+          domainPart.endsWith(`.${dom}`) ||
+          emailOnly.includes(`@${dom}`)
         );
       });
     };
@@ -2304,13 +2308,14 @@ export class MailService implements OnModuleInit {
         return { syncedCount: 0, requiresReauth: true, error: 'NO_TOKEN' };
       }
 
-      // Fetch latest 100 message IDs from Gmail (filtered by allowed domains if shared group mailbox)
-      let listUrl = 'https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=100';
+      // Fetch latest message IDs from Gmail (filtered by allowed domains if shared group mailbox)
+      let listUrl = 'https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=500';
       if (account.isShared && account.allowedDomains && account.allowedDomains.length > 0) {
-        const cleanList = account.allowedDomains.map((d: string) => d.replace(/^@/, '').trim()).filter(Boolean);
+        const cleanList = account.allowedDomains.map((d: string) => d.replace(/^@/, '').trim().toLowerCase()).filter(Boolean);
         if (cleanList.length > 0) {
-          const qStr = cleanList.map((d: string) => `from:(*@${d}) OR to:(*@${d})`).join(' OR ');
-          listUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=100&q=${encodeURIComponent(qStr)}`;
+          const qParts = cleanList.map((d: string) => `from:(*@${d}) OR to:(*@${d}) OR from:(*.${d}) OR to:(*.${d})`);
+          const qStr = qParts.join(' OR ');
+          listUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=500&q=${encodeURIComponent(qStr)}`;
         }
       }
 
@@ -2348,8 +2353,17 @@ export class MailService implements OnModuleInit {
 
       // Also ensure latest sent messages are fetched from Gmail
       try {
+        let sentUrl = 'https://gmail.googleapis.com/gmail/v1/users/me/messages?q=in:sent&maxResults=100';
+        if (account.isShared && account.allowedDomains && account.allowedDomains.length > 0) {
+          const cleanList = account.allowedDomains.map((d: string) => d.replace(/^@/, '').trim().toLowerCase()).filter(Boolean);
+          if (cleanList.length > 0) {
+            const qParts = cleanList.map((d: string) => `from:(*@${d}) OR to:(*@${d}) OR from:(*.${d}) OR to:(*.${d})`);
+            const qStr = qParts.join(' OR ');
+            sentUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=in:sent+(${encodeURIComponent(qStr)})&maxResults=100`;
+          }
+        }
         const sentRes = await fetch(
-          'https://gmail.googleapis.com/gmail/v1/users/me/messages?q=in:sent&maxResults=25',
+          sentUrl,
           { headers: { Authorization: `Bearer ${accessToken}` } },
         );
         if (sentRes.ok) {
@@ -2369,12 +2383,13 @@ export class MailService implements OnModuleInit {
 
       // Also ensure latest spam messages are fetched from Gmail
       try {
-        let spamUrl = 'https://gmail.googleapis.com/gmail/v1/users/me/messages?q=in:spam&maxResults=25&includeSpamTrash=true';
+        let spamUrl = 'https://gmail.googleapis.com/gmail/v1/users/me/messages?q=in:spam&maxResults=100&includeSpamTrash=true';
         if (account.isShared && account.allowedDomains && account.allowedDomains.length > 0) {
-          const cleanList = account.allowedDomains.map((d: string) => d.replace(/^@/, '').trim()).filter(Boolean);
+          const cleanList = account.allowedDomains.map((d: string) => d.replace(/^@/, '').trim().toLowerCase()).filter(Boolean);
           if (cleanList.length > 0) {
-            const qStr = cleanList.map((d: string) => `from:(*@${d}) OR to:(*@${d})`).join(' OR ');
-            spamUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=in:spam+(${encodeURIComponent(qStr)})&maxResults=25&includeSpamTrash=true`;
+            const qParts = cleanList.map((d: string) => `from:(*@${d}) OR to:(*@${d}) OR from:(*.${d}) OR to:(*.${d})`);
+            const qStr = qParts.join(' OR ');
+            spamUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=in:spam+(${encodeURIComponent(qStr)})&maxResults=100&includeSpamTrash=true`;
           }
         }
         const spamRes = await fetch(spamUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
@@ -2419,9 +2434,9 @@ export class MailService implements OnModuleInit {
 
       let syncedCount = 0;
 
-      // Fetch message details only for NEW messages in small batches (capped at 25 to stay within limits)
-      const toFetch = newRefs.slice(0, 25);
-      const batchSize = 4;
+      // Fetch message details only for NEW messages in concurrent batches
+      const toFetch = newRefs.slice(0, 100);
+      const batchSize = 10;
       for (let i = 0; i < toFetch.length; i += batchSize) {
         const batch = toFetch.slice(i, i + batchSize);
         await Promise.all(
