@@ -7023,13 +7023,29 @@ function WorkspaceShellContent() {
                                 <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
                                   <p className="truncate text-[10px] text-slate-400 font-mono leading-tight">{acc.emailAddress}</p>
                                   {acc.allowedDomains && acc.allowedDomains.length > 0 && (
-                                    <span
-                                      className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded bg-indigo-50 border border-indigo-200/80 text-[8px] font-bold text-indigo-700 shrink-0"
-                                      title={`Allowed client domains: ${acc.allowedDomains.map(d => '@' + d.replace(/^@/, '')).join(', ')}`}
-                                    >
-                                      <Shield className="w-2.5 h-2.5 text-indigo-600" />
-                                      <span>@{acc.allowedDomains[0].replace(/^@/, '')}{acc.allowedDomains.length > 1 ? ` +${acc.allowedDomains.length - 1}` : ''}</span>
-                                    </span>
+                                    canManageGroupMail ? (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleOpenDomainFilterModal(acc);
+                                        }}
+                                        className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-[8.5px] font-bold text-indigo-700 shrink-0 cursor-pointer transition-colors"
+                                        title={`Allowed client domains: ${acc.allowedDomains.map((d) => '@' + d.replace(/^@/, '')).join(', ')} (Click to configure)`}
+                                      >
+                                        <Shield className="w-2.5 h-2.5 text-indigo-600" />
+                                        <span>@{acc.allowedDomains[0].replace(/^@/, '')}{acc.allowedDomains.length > 1 ? ` +${acc.allowedDomains.length - 1}` : ''}</span>
+                                        <Settings className="w-2 h-2 text-indigo-400 ml-0.5" />
+                                      </button>
+                                    ) : (
+                                      <span
+                                        className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded bg-indigo-50 border border-indigo-200/80 text-[8px] font-bold text-indigo-700 shrink-0"
+                                        title={`Allowed client domains: ${acc.allowedDomains.map((d) => '@' + d.replace(/^@/, '')).join(', ')}`}
+                                      >
+                                        <Shield className="w-2.5 h-2.5 text-indigo-600" />
+                                        <span>@{acc.allowedDomains[0].replace(/^@/, '')}{acc.allowedDomains.length > 1 ? ` +${acc.allowedDomains.length - 1}` : ''}</span>
+                                      </span>
+                                    )
                                   )}
                                 </div>
                               </div>
@@ -7052,10 +7068,10 @@ function WorkspaceShellContent() {
                                     e.stopPropagation();
                                     handleOpenDomainFilterModal(acc);
                                   }}
-                                  className="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all cursor-pointer"
+                                  className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all cursor-pointer opacity-70 group-hover:opacity-100"
                                   title="Allowed Domains (Filter Client Mails)"
                                 >
-                                  <Settings className="h-3 w-3" />
+                                  <Settings className="h-3.5 w-3.5" />
                                 </button>
                               )}
                               {canManageGroupMail && (
