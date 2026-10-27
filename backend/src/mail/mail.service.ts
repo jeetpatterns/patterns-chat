@@ -549,87 +549,115 @@ export class MailService {
 
     // Verify IMAP connection if credentials provided
     if (data.imapHost && data.imapPassword) {
+      const preferredHost = data.imapHost.trim();
+      const candidateHosts = Array.from(new Set([
+        preferredHost,
+        preferredHost.replace(/^mail1\./, 'mail.'),
+        preferredHost.replace(/^mail\./, 'mail1.'),
+      ]));
       const preferredUser = data.imapUser?.trim() || cleanEmail;
       const candidateUsers = Array.from(new Set([preferredUser, cleanEmail, cleanEmail.split('@')[0]]));
 
       let imapConnected = false;
       let lastImapError: any = null;
+      let workingHost = preferredHost;
       let workingUser = preferredUser;
 
-      for (const userCandidate of candidateUsers) {
-        const client = new ImapFlow({
-          host: data.imapHost.trim(),
-          port: data.imapPort || 993,
-          secure: data.imapTls !== false,
-          auth: {
-            user: userCandidate,
-            pass: data.imapPassword,
-          },
-          tls: {
-            rejectUnauthorized: false,
-          },
-          logger: false,
-        });
+      imapLoop:
+      for (const hostCandidate of candidateHosts) {
+        for (const userCandidate of candidateUsers) {
+          const client = new ImapFlow({
+            host: hostCandidate,
+            port: data.imapPort || 993,
+            secure: data.imapTls !== false,
+            auth: {
+              user: userCandidate,
+              pass: data.imapPassword,
+            },
+            tls: {
+              rejectUnauthorized: false,
+            },
+            logger: false,
+          });
 
-        try {
-          await client.connect();
-          await client.logout();
-          workingUser = userCandidate;
-          imapConnected = true;
-          break;
-        } catch (err: any) {
-          lastImapError = err;
+          try {
+            await client.connect();
+            await client.logout();
+            workingHost = hostCandidate;
+            workingUser = userCandidate;
+            imapConnected = true;
+            break imapLoop;
+          } catch (err: any) {
+            lastImapError = err;
+          }
         }
       }
 
       if (!imapConnected) {
         let detail = lastImapError?.responseText || lastImapError?.message || 'Invalid username, password, or server settings';
-        if (detail.includes('Unexpected close')) {
-          detail = `Server closed connection (${data.imapHost} rejected IMAP login with "Login rejected for this user"). Please check if IMAP is enabled on this account in your Zimbra / Webmail settings, or use an Application Passcode if Two-Factor Authentication (2FA) is enabled.`;
+        if (
+          detail.includes('Unexpected close') ||
+          detail.includes('AUTHENTICATE failed') ||
+          detail.includes('LOGIN failed') ||
+          detail.includes('Command failed')
+        ) {
+          detail = `Authentication failed. If your organization uses Zimbra or 2FA, you must use an Application Passcode (from Zimbra Preferences -> Accounts -> Applications -> Add Application Code) instead of your regular webmail login password.`;
         }
         throw new BadRequestException(`IMAP verification failed: ${detail}`);
       }
 
+      data.imapHost = workingHost;
       data.imapUser = workingUser;
     }
 
     // Verify SMTP connection if credentials provided
     if (data.smtpHost && data.smtpPassword) {
+      const preferredHost = data.smtpHost.trim();
+      const candidateHosts = Array.from(new Set([
+        preferredHost,
+        preferredHost.replace(/^mail\./, 'mail1.'),
+        preferredHost.replace(/^mail1\./, 'mail.'),
+      ]));
       const preferredPort = Number(data.smtpPort) || 587;
-      const candidatePorts = preferredPort === 465 ? [465, 587] : [preferredPort, 587, 465];
+      const candidatePorts = preferredPort === 465 ? [465, 587, 25] : [preferredPort, 587, 465, 25];
       const uniquePorts = Array.from(new Set(candidatePorts));
       const preferredUser = data.smtpUser?.trim() || cleanEmail;
       const candidateUsers = Array.from(new Set([preferredUser, cleanEmail, cleanEmail.split('@')[0]]));
 
       let smtpVerified = false;
       let lastSmtpError: any = null;
+      let workingHost = preferredHost;
       let workingPort = preferredPort;
       let workingUser = preferredUser;
 
       outerLoop:
-      for (const userCandidate of candidateUsers) {
-        for (const port of uniquePorts) {
-          try {
-            const transporter = nodemailer.createTransport({
-              host: data.smtpHost.trim(),
-              port,
-              secure: port === 465,
-              auth: {
-                user: userCandidate,
-                pass: data.smtpPassword,
-              },
-              tls: {
-                rejectUnauthorized: false,
-              },
-            });
+      for (const hostCandidate of candidateHosts) {
+        for (const userCandidate of candidateUsers) {
+          for (const port of uniquePorts) {
+            try {
+              const transporter = nodemailer.createTransport({
+                host: hostCandidate,
+                port,
+                secure: port === 465,
+                auth: {
+                  user: userCandidate,
+                  pass: data.smtpPassword,
+                },
+                tls: {
+                  rejectUnauthorized: false,
+                },
+                connectionTimeout: 8000,
+              });
 
-            await transporter.verify();
-            workingPort = port;
-            workingUser = userCandidate;
-            smtpVerified = true;
-            break outerLoop;
-          } catch (err: any) {
-            lastSmtpError = err;
+              await transporter.verify();
+              workingHost = hostCandidate;
+              workingPort = port;
+              workingUser = userCandidate;
+              smtpVerified = true;
+              break outerLoop;
+            } catch (err: any) {
+              lastSmtpError = err;
+            }
           }
         }
       }
@@ -640,6 +668,7 @@ export class MailService {
         );
       }
 
+      data.smtpHost = workingHost;
       data.smtpPort = workingPort;
       data.smtpUser = workingUser;
     }
