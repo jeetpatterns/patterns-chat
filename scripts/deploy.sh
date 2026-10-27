@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -e
+
+# Define PS1 so ~/.bashrc does not fail with unbound variable
+export PS1="${PS1:-}"
 
 # Load environment & NVM paths for non-interactive SSH sessions
 export NVM_DIR="$HOME/.nvm"
 if [ -s "$NVM_DIR/nvm.sh" ]; then
     \. "$NVM_DIR/nvm.sh"
 fi
-[ -s "$HOME/.profile" ] && source "$HOME/.profile" || true
-[ -s "$HOME/.bashrc" ] && source "$HOME/.bashrc" || true
+[ -s "$HOME/.profile" ] && source "$HOME/.profile" 2>/dev/null || true
+[ -s "$HOME/.bashrc" ] && source "$HOME/.bashrc" 2>/dev/null || true
 export PATH="$PATH:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin"
 
 APP_DIR="/var/www/chat"
