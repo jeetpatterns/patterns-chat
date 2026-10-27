@@ -8,16 +8,18 @@ import {
   ConnectedSocket,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { Logger } from '@nestjs/common';
+import { Logger, OnModuleInit } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { MessagesService } from './messages.service.js';
+import { PrismaService } from '../common/prisma.service.js';
+import { PresenceStatus } from '@prisma/client';
 
 @WebSocketGateway({
   cors: {
     origin: '*',
   },
 })
-export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect, OnModuleInit {
   @WebSocketServer()
   server!: Server;
 
@@ -30,20 +32,71 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
   >();
   private socketToMeetingMap = new Map<string, string>();
 
+  // Real-time user presence tracking
+  private userSocketsMap = new Map<string, Set<string>>(); // userId -> Set<socketId>
+  private socketToUserMap = new Map<string, string>(); // socketId -> userId
+  private userManualPresenceMap = new Map<string, PresenceStatus>(); // userId -> PresenceStatus
+
   constructor(
     private readonly messagesService: MessagesService,
     private readonly jwtService: JwtService,
+    private readonly prisma: PrismaService,
   ) {}
+
+  async onModuleInit() {
+    try {
+      // On server boot/restart, reset all users to OFFLINE since no sockets are connected yet
+      await this.prisma.user.updateMany({
+        data: { presence: PresenceStatus.OFFLINE },
+      });
+      this.logger.log('🔄 All users successfully initialized to OFFLINE on server boot');
+    } catch (err) {
+      this.logger.warn('Failed to reset presence on gateway startup:', err);
+    }
+  }
 
   handleConnection(client: Socket) {
     this.logger.log(`🔌 Client connected: ${client.id}`);
   }
 
-  handleDisconnect(client: Socket) {
+  async handleDisconnect(client: Socket) {
     this.logger.log(`🔌 Client disconnected: ${client.id}`);
     const meetingId = this.socketToMeetingMap.get(client.id);
     if (meetingId) {
       this.leaveMeetingInternal(client, meetingId);
+    }
+
+    // Handle real-time presence disconnect
+    const userId = this.socketToUserMap.get(client.id);
+    if (userId) {
+      this.socketToUserMap.delete(client.id);
+      const socketSet = this.userSocketsMap.get(userId);
+      if (socketSet) {
+        socketSet.delete(client.id);
+        if (socketSet.size === 0) {
+          this.userSocketsMap.delete(userId);
+          this.userManualPresenceMap.delete(userId);
+
+          // All connections for this user are closed (closed browser, app, PC locked/shutdown, or logged out)
+          try {
+            await this.prisma.user.update({
+              where: { id: userId },
+              data: { presence: PresenceStatus.OFFLINE },
+            });
+          } catch (err) {
+            this.logger.warn(`Failed to mark user ${userId} as OFFLINE:`, err);
+          }
+
+          // Broadcast to all clients in real time
+          this.server.emit('presence_updated', {
+            id: userId,
+            presence: PresenceStatus.OFFLINE,
+          });
+          this.logger.log(`⚪ User ${userId} disconnected completely -> OFFLINE`);
+        } else {
+          this.logger.log(`👤 User ${userId} still has ${socketSet.size} active socket(s)`);
+        }
+      }
     }
   }
 
@@ -137,29 +190,125 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   @SubscribeMessage('join_user')
-  handleJoinUser(
+  async handleJoinUser(
     @ConnectedSocket() client: Socket,
-    @MessageBody() data: { userId: string },
+    @MessageBody() data: { userId: string; presence?: PresenceStatus },
   ) {
     if (data?.userId) {
-      const room = `user:${data.userId}`;
+      const userId = data.userId;
+      const room = `user:${userId}`;
       client.join(room);
-      this.logger.log(`🔔 Socket ${client.id} joined user room ${room}`);
-      return { event: 'joined_user', userId: data.userId };
+
+      // Register socket-to-user mapping
+      this.socketToUserMap.set(client.id, userId);
+      let socketSet = this.userSocketsMap.get(userId);
+      if (!socketSet) {
+        socketSet = new Set<string>();
+        this.userSocketsMap.set(userId, socketSet);
+      }
+      socketSet.add(client.id);
+
+      // Use explicit status or preserve manual override, default to ONLINE
+      const currentPresence = data.presence || this.userManualPresenceMap.get(userId) || PresenceStatus.ONLINE;
+      this.userManualPresenceMap.set(userId, currentPresence);
+
+      try {
+        await this.prisma.user.update({
+          where: { id: userId },
+          data: { presence: currentPresence },
+        });
+      } catch (err) {
+        this.logger.warn(`Failed to update presence for ${userId}:`, err);
+      }
+
+      // Broadcast presence update to everyone in real time
+      this.server.emit('presence_updated', {
+        id: userId,
+        presence: currentPresence,
+      });
+
+      this.logger.log(`🟢 Socket ${client.id} joined user ${userId} -> ${currentPresence} (active sockets: ${socketSet.size})`);
+      return { event: 'joined_user', userId, presence: currentPresence };
     }
   }
 
   @SubscribeMessage('leave_user')
-  handleLeaveUser(
+  async handleLeaveUser(
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { userId: string },
   ) {
     if (data?.userId) {
-      const room = `user:${data.userId}`;
+      const userId = data.userId;
+      const room = `user:${userId}`;
       client.leave(room);
+      this.socketToUserMap.delete(client.id);
+
+      const socketSet = this.userSocketsMap.get(userId);
+      if (socketSet) {
+        socketSet.delete(client.id);
+        if (socketSet.size === 0) {
+          this.userSocketsMap.delete(userId);
+          this.userManualPresenceMap.delete(userId);
+
+          try {
+            await this.prisma.user.update({
+              where: { id: userId },
+              data: { presence: PresenceStatus.OFFLINE },
+            });
+          } catch (err) {
+            this.logger.warn(`Failed to mark user ${userId} as OFFLINE:`, err);
+          }
+
+          this.server.emit('presence_updated', {
+            id: userId,
+            presence: PresenceStatus.OFFLINE,
+          });
+          this.logger.log(`⚪ User ${userId} left completely -> OFFLINE`);
+        }
+      }
+
       this.logger.log(`🔔 Socket ${client.id} left user room ${room}`);
       return { event: 'left_user', userId: data.userId };
     }
+  }
+
+  @SubscribeMessage('set_presence')
+  async handleSetPresence(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { userId?: string; presence: PresenceStatus; token?: string },
+  ) {
+    let userId = data.userId;
+    if (!userId && data.token) {
+      try {
+        const decoded: any = this.jwtService.verify(data.token);
+        userId = decoded.sub;
+      } catch {
+        // ignore
+      }
+    }
+    if (!userId) {
+      userId = this.socketToUserMap.get(client.id);
+    }
+    if (!userId) return { error: 'Unknown user' };
+
+    const presence = data.presence;
+    this.userManualPresenceMap.set(userId, presence);
+
+    try {
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { presence },
+      });
+    } catch (err) {
+      this.logger.warn(`Failed to update presence for ${userId}:`, err);
+    }
+
+    this.server.emit('presence_updated', {
+      id: userId,
+      presence,
+    });
+    this.logger.log(`🔄 Presence updated for user ${userId} -> ${presence}`);
+    return { success: true, userId, presence };
   }
 
   @SubscribeMessage('send_message')
@@ -298,7 +447,7 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   @SubscribeMessage('answer_call')
-  handleAnswerCall(
+  async handleAnswerCall(
     @ConnectedSocket() client: Socket,
     @MessageBody()
     data: {
@@ -312,6 +461,22 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
         signalData: data.signalData,
       });
       this.logger.log(`📞 Call accepted, response forwarded to user ${data.toUserId}`);
+
+      // Set both participants to BUSY during call
+      const calleeId = this.socketToUserMap.get(client.id);
+      const callerId = data.toUserId;
+      const callUsers = [calleeId, callerId].filter(Boolean) as string[];
+
+      for (const uid of callUsers) {
+        this.userManualPresenceMap.set(uid, PresenceStatus.BUSY);
+        try {
+          await this.prisma.user.update({
+            where: { id: uid },
+            data: { presence: PresenceStatus.BUSY },
+          });
+        } catch {}
+        this.server.emit('presence_updated', { id: uid, presence: PresenceStatus.BUSY });
+      }
     }
   }
 
@@ -333,7 +498,7 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
   }
 
   @SubscribeMessage('end_call')
-  handleEndCall(
+  async handleEndCall(
     @ConnectedSocket() client: Socket,
     @MessageBody()
     data: {
@@ -344,11 +509,27 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
       const room = `user:${data.toUserId}`;
       client.to(room).emit('call_ended');
       this.logger.log(`📞 Call ended for user ${data.toUserId}`);
+
+      // Restore participants to ONLINE
+      const userA = this.socketToUserMap.get(client.id);
+      const userB = data.toUserId;
+      const usersToRestore = [userA, userB].filter(Boolean) as string[];
+
+      for (const uid of usersToRestore) {
+        this.userManualPresenceMap.set(uid, PresenceStatus.ONLINE);
+        try {
+          await this.prisma.user.update({
+            where: { id: uid },
+            data: { presence: PresenceStatus.ONLINE },
+          });
+        } catch {}
+        this.server.emit('presence_updated', { id: uid, presence: PresenceStatus.ONLINE });
+      }
     }
   }
 
   @SubscribeMessage('decline_call')
-  handleDeclineCall(
+  async handleDeclineCall(
     @ConnectedSocket() client: Socket,
     @MessageBody()
     data: {
@@ -359,6 +540,21 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
       const room = `user:${data.toUserId}`;
       client.to(room).emit('call_declined');
       this.logger.log(`📞 Call declined for user ${data.toUserId}`);
+
+      const userA = this.socketToUserMap.get(client.id);
+      const userB = data.toUserId;
+      const usersToRestore = [userA, userB].filter(Boolean) as string[];
+
+      for (const uid of usersToRestore) {
+        this.userManualPresenceMap.set(uid, PresenceStatus.ONLINE);
+        try {
+          await this.prisma.user.update({
+            where: { id: uid },
+            data: { presence: PresenceStatus.ONLINE },
+          });
+        } catch {}
+        this.server.emit('presence_updated', { id: uid, presence: PresenceStatus.ONLINE });
+      }
     }
   }
 
@@ -486,6 +682,14 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
       user,
     });
     this.socketToMeetingMap.set(client.id, meetingId);
+
+    // Set user presence to BUSY during team meeting
+    this.userManualPresenceMap.set(user.id, PresenceStatus.BUSY);
+    this.prisma.user.update({
+      where: { id: user.id },
+      data: { presence: PresenceStatus.BUSY },
+    }).catch(() => {});
+    this.server.emit('presence_updated', { id: user.id, presence: PresenceStatus.BUSY });
 
     // Send existing peers to joining client
     client.emit('meeting_existing_participants', {
@@ -621,6 +825,16 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
         socketId: client.id,
         userId: leavingUser?.user?.id,
       });
+
+      if (leavingUser?.user?.id) {
+        const uid = leavingUser.user.id;
+        this.userManualPresenceMap.set(uid, PresenceStatus.ONLINE);
+        this.prisma.user.update({
+          where: { id: uid },
+          data: { presence: PresenceStatus.ONLINE },
+        }).catch(() => {});
+        this.server.emit('presence_updated', { id: uid, presence: PresenceStatus.ONLINE });
+      }
 
       const remaining = roomParticipants.size;
       this.logger.log(`🚪 User left group meeting ${meetingId}. Remaining: ${remaining}`);

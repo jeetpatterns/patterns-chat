@@ -52,11 +52,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // Single active device enforcement: listen for force_logout broadcast
+  // Single active device enforcement & Realtime user presence connection
   useEffect(() => {
     if (!user?.id) return;
     const socket = getSocket();
-    socket.emit('join_user', { userId: user.id });
+    socket.emit('join_user', { userId: user.id, presence: 'ONLINE' });
+
+    const handleConnect = () => {
+      socket.emit('join_user', { userId: user.id, presence: 'ONLINE' });
+    };
 
     const handleForceLogout = (data: { reason?: string }) => {
       console.warn('⚠️ Force logout received from server:', data);
@@ -66,8 +70,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
+    socket.on('connect', handleConnect);
     socket.on('force_logout', handleForceLogout);
     return () => {
+      socket.off('connect', handleConnect);
       socket.off('force_logout', handleForceLogout);
     };
   }, [user?.id]);
@@ -192,6 +198,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   function logout() {
+    if (user?.id) {
+      try {
+        const socket = getSocket();
+        socket.emit('set_presence', { userId: user.id, presence: 'OFFLINE' });
+        socket.emit('leave_user', { userId: user.id });
+      } catch {
+        // ignore
+      }
+    }
     setUser(null);
     setToken(null);
     setWorkspaces([]);

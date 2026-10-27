@@ -2271,6 +2271,9 @@ function WorkspaceShellContent() {
           ? { ...prev, presence: updatedUser.presence }
           : prev,
       );
+      if (user && updatedUser.id === user.id) {
+        setUserPresence(updatedUser.presence);
+      }
     }
 
     socket.on('presence_updated', handlePresenceUpdated);
@@ -2278,7 +2281,91 @@ function WorkspaceShellContent() {
     return () => {
       socket.off('presence_updated', handlePresenceUpdated);
     };
-  }, []);
+  }, [user]);
+
+  // Real-time Activity, Tab Visibility, and Idle / Screen Lock Detection
+  const isAutoAwayRef = useRef<boolean>(false);
+  const userPresenceRef = useRef<PresenceStatus>(userPresence);
+  userPresenceRef.current = userPresence;
+
+  useEffect(() => {
+    if (!user || !token) return;
+
+    const socket = getSocket();
+    let idleTimeout: any = null;
+    let visibilityTimeout: any = null;
+
+    function resetIdleTimer() {
+      // If status was auto-set to AWAY, return immediately to ONLINE upon activity
+      if (isAutoAwayRef.current) {
+        isAutoAwayRef.current = false;
+        handleUpdatePresence('ONLINE');
+      }
+
+      if (idleTimeout) clearTimeout(idleTimeout);
+      // Auto-set AWAY after 3 minutes of inactivity
+      idleTimeout = setTimeout(() => {
+        if (userPresenceRef.current === 'ONLINE') {
+          isAutoAwayRef.current = true;
+          handleUpdatePresence('AWAY');
+        }
+      }, 3 * 60 * 1000);
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === 'hidden') {
+        // Tab hidden or screen locked: grace period of 60 seconds before setting AWAY
+        if (visibilityTimeout) clearTimeout(visibilityTimeout);
+        visibilityTimeout = setTimeout(() => {
+          if (document.visibilityState === 'hidden' && userPresenceRef.current === 'ONLINE') {
+            isAutoAwayRef.current = true;
+            handleUpdatePresence('AWAY');
+          }
+        }, 60 * 1000);
+      } else {
+        if (visibilityTimeout) {
+          clearTimeout(visibilityTimeout);
+          visibilityTimeout = null;
+        }
+        if (isAutoAwayRef.current) {
+          isAutoAwayRef.current = false;
+          handleUpdatePresence('ONLINE');
+        }
+      }
+    }
+
+    const currentUserId = user.id;
+    function handleBeforeUnload() {
+      socket.emit('set_presence', { userId: currentUserId, presence: 'OFFLINE' });
+      socket.emit('leave_user', { userId: currentUserId });
+    }
+
+    const activityEvents = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart'];
+    activityEvents.forEach((evt) => window.addEventListener(evt, resetIdleTimer, { passive: true }));
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    resetIdleTimer();
+
+    return () => {
+      if (idleTimeout) clearTimeout(idleTimeout);
+      if (visibilityTimeout) clearTimeout(visibilityTimeout);
+      activityEvents.forEach((evt) => window.removeEventListener(evt, resetIdleTimer));
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [user?.id, token]);
+
+  // Synchronize presence to BUSY during active 1-on-1 calls or team meetings
+  useEffect(() => {
+    if (activeTeamMeeting || callStatus === 'connected' || callStatus === 'calling') {
+      handleUpdatePresence('BUSY');
+    } else if (callStatus === 'idle' && !activeTeamMeeting) {
+      if (userPresence === 'BUSY') {
+        handleUpdatePresence('ONLINE');
+      }
+    }
+  }, [activeTeamMeeting, callStatus]);
 
   // Play subtle Slack-like synth chime
   function playNotificationChime() {
@@ -4934,6 +5021,7 @@ function WorkspaceShellContent() {
     setShowPresenceMenu(false);
 
     try {
+      getSocket().emit('set_presence', { userId: user.id, presence: newPresence });
       await fetch(`${API_URL}/users/presence`, {
         method: 'PATCH',
         headers: {
@@ -8072,6 +8160,7 @@ function WorkspaceShellContent() {
                 {members.map((m) => {
                   const isDmActive = activeRecipient?.id === m.user.id;
                   const isMe = m.user.id === user?.id;
+                  const memberPresence = isMe ? userPresence : m.user.presence;
                   const unreadCount = unreadDirectMessages[m.user.id] || 0;
                   return (
                     <button
@@ -8080,6 +8169,7 @@ function WorkspaceShellContent() {
                         handleSelectDirectMessage(m.user);
                         setUnreadDirectMessages((prev) => ({ ...prev, [m.user.id]: 0 }));
                       }}
+                      title={`${m.user.name} (${memberPresence === 'BUSY' ? 'In a call' : memberPresence === 'AWAY' ? 'Away' : memberPresence === 'ONLINE' ? 'Active' : 'Offline'})`}
                       className={`w-full flex items-center justify-between rounded-xl px-2.5 py-1.5 text-left transition-all group ${
                         isDmActive
                           ? 'bg-indigo-50/90 border border-indigo-200/80 text-indigo-900 font-bold shadow-2xs'
@@ -8097,11 +8187,13 @@ function WorkspaceShellContent() {
                           />
                           <span
                             className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-white ${
-                              m.user.presence === 'AWAY'
+                              memberPresence === 'BUSY'
+                                ? 'bg-rose-500'
+                                : memberPresence === 'AWAY'
                                 ? 'bg-amber-400'
-                                : m.user.presence === 'OFFLINE'
-                                ? 'bg-slate-300'
-                                : 'bg-emerald-500'
+                                : memberPresence === 'ONLINE'
+                                ? 'bg-emerald-500'
+                                : 'bg-slate-300'
                             }`}
                           />
                         </div>
@@ -8406,11 +8498,13 @@ function WorkspaceShellContent() {
                 />
                 <span
                   className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-white ${
-                    activeRecipient.presence === 'AWAY'
+                    activeRecipient.presence === 'BUSY'
+                      ? 'bg-rose-500'
+                      : activeRecipient.presence === 'AWAY'
                       ? 'bg-amber-400'
-                      : activeRecipient.presence === 'OFFLINE'
-                      ? 'bg-slate-300'
-                      : 'bg-emerald-500'
+                      : activeRecipient.presence === 'ONLINE'
+                      ? 'bg-emerald-500'
+                      : 'bg-slate-300'
                   }`}
                 />
               </div>
@@ -8421,18 +8515,22 @@ function WorkspaceShellContent() {
                   </span>
                   <span
                     className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider shrink-0 ${
-                      activeRecipient.presence === 'AWAY'
+                      activeRecipient.presence === 'BUSY'
+                        ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                        : activeRecipient.presence === 'AWAY'
                         ? 'bg-amber-50 text-amber-700 border border-amber-200'
-                        : activeRecipient.presence === 'OFFLINE'
-                        ? 'bg-slate-100 text-slate-600 border border-slate-200'
-                        : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : activeRecipient.presence === 'ONLINE'
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : 'bg-slate-100 text-slate-600 border border-slate-200'
                     }`}
                   >
-                    {activeRecipient.presence === 'AWAY'
+                    {activeRecipient.presence === 'BUSY'
+                      ? 'In a call'
+                      : activeRecipient.presence === 'AWAY'
                       ? 'Away'
-                      : activeRecipient.presence === 'OFFLINE'
-                      ? 'Offline'
-                      : 'Active now'}
+                      : activeRecipient.presence === 'ONLINE'
+                      ? 'Active now'
+                      : 'Offline'}
                   </span>
                 </div>
                 <span
@@ -8857,11 +8955,13 @@ function WorkspaceShellContent() {
                       />
                       <span
                         className={`absolute -bottom-1 -right-1 h-3.5 w-3.5 rounded-full ring-2 ring-white ${
-                          activeRecipient.presence === 'AWAY'
+                          activeRecipient.presence === 'BUSY'
+                            ? 'bg-rose-500'
+                            : activeRecipient.presence === 'AWAY'
                             ? 'bg-amber-400'
-                            : activeRecipient.presence === 'OFFLINE'
-                            ? 'bg-slate-300'
-                            : 'bg-emerald-500'
+                            : activeRecipient.presence === 'ONLINE'
+                            ? 'bg-emerald-500'
+                            : 'bg-slate-300'
                         }`}
                       />
                     </div>
@@ -10346,11 +10446,13 @@ function WorkspaceShellContent() {
                                   />
                                   <span
                                     className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-2 ring-white ${
-                                      m.user.presence === 'AWAY'
+                                      (isMe ? userPresence : m.user.presence) === 'BUSY'
+                                        ? 'bg-rose-500'
+                                        : (isMe ? userPresence : m.user.presence) === 'AWAY'
                                         ? 'bg-amber-400'
-                                        : m.user.presence === 'OFFLINE'
-                                        ? 'bg-slate-300'
-                                        : 'bg-emerald-500'
+                                        : (isMe ? userPresence : m.user.presence) === 'ONLINE'
+                                        ? 'bg-emerald-500'
+                                        : 'bg-slate-300'
                                     }`}
                                   />
                                 </div>
@@ -10450,11 +10552,13 @@ function WorkspaceShellContent() {
                                 />
                                 <span
                                   className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-2 ring-white ${
-                                    m.user.presence === 'AWAY'
+                                    (isMe ? userPresence : m.user.presence) === 'BUSY'
+                                      ? 'bg-rose-500'
+                                      : (isMe ? userPresence : m.user.presence) === 'AWAY'
                                       ? 'bg-amber-400'
-                                      : m.user.presence === 'OFFLINE'
-                                      ? 'bg-slate-300'
-                                      : 'bg-emerald-500'
+                                      : (isMe ? userPresence : m.user.presence) === 'ONLINE'
+                                      ? 'bg-emerald-500'
+                                      : 'bg-slate-300'
                                   }`}
                                 />
                               </div>
@@ -11959,11 +12063,13 @@ function WorkspaceShellContent() {
                                   />
                                   <span
                                     className={`absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full ring-1 ring-white ${
-                                      p.presence === 'AWAY'
+                                      p.presence === 'BUSY'
+                                        ? 'bg-rose-500'
+                                        : p.presence === 'AWAY'
                                         ? 'bg-amber-400'
-                                        : p.presence === 'OFFLINE'
-                                        ? 'bg-slate-300'
-                                        : 'bg-emerald-500'
+                                        : p.presence === 'ONLINE'
+                                        ? 'bg-emerald-500'
+                                        : 'bg-slate-300'
                                     }`}
                                   />
                                 </div>
