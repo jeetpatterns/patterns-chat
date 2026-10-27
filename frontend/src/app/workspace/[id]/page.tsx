@@ -905,7 +905,7 @@ function WorkspaceShellContent() {
   });
   const [customMailError, setCustomMailError] = useState<string | null>(null);
   const [isVerifyingCustomMail, setIsVerifyingCustomMail] = useState(false);
-  const [showAdvancedServerSettings, setShowAdvancedServerSettings] = useState(false);
+  const [showAdvancedServerSettings, setShowAdvancedServerSettings] = useState(true);
   const [connectMailMode, setConnectMailMode] = useState<'personal' | 'group'>('group');
   const [connectMailChannelId, setConnectMailChannelId] = useState<string>('');
   const [groupAssignMode, setGroupAssignMode] = useState<'existing' | 'new'>('existing');
@@ -1775,6 +1775,20 @@ function WorkspaceShellContent() {
       setCustomMailError('Please enter a valid work email address.');
       return;
     }
+
+    const isSharedMail = connectMailMode === 'group';
+    if (isSharedMail && !canManageGroupMail) {
+      setCustomMailError('Only Workspace Admins and Owners (SuperAdmins) can connect a group/shared mailbox.');
+      return;
+    }
+
+    let effectiveChannelId = connectMailChannelId;
+    if (isSharedMail) {
+      const cid = await prepareGroupChannel();
+      if (!cid) return;
+      effectiveChannelId = cid;
+    }
+
     setCustomMailError(null);
     setIsVerifyingCustomMail(true);
 
@@ -1782,8 +1796,14 @@ function WorkspaceShellContent() {
       const emailDomain = customMailConfig.emailAddress.split('@')[1]?.trim();
       const resolvedImapHost = (customMailConfig.imapHost.trim() || `mail.${emailDomain}`).trim();
       const resolvedSmtpHost = (customMailConfig.smtpHost.trim() || `mail.${emailDomain}`).trim();
-      const resolvedImapUser = customMailConfig.imapUser.trim() || customMailConfig.emailAddress.trim().toLowerCase();
-      const resolvedSmtpUser = customMailConfig.smtpUser.trim() || resolvedImapUser;
+      const cleanEmail = customMailConfig.emailAddress.trim().toLowerCase();
+      const resolvedImapUser = cleanEmail;
+      const resolvedSmtpUser = cleanEmail;
+
+      const channelName = channels.find((c) => c.id === effectiveChannelId)?.name || newGroupChannelName || '';
+      const customDisplayName = isSharedMail
+        ? (channelName ? `#${channelName} Group Inbox` : `${cleanEmail.split('@')[0]} Group`)
+        : cleanEmail.split('@')[0];
 
       const res = await fetch(`${API_URL}/mail/accounts/connect`, {
         method: 'POST',
@@ -1792,8 +1812,8 @@ function WorkspaceShellContent() {
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          emailAddress: customMailConfig.emailAddress.trim().toLowerCase(),
-          displayName: customMailConfig.displayName.trim() || customMailConfig.emailAddress.split('@')[0],
+          emailAddress: cleanEmail,
+          displayName: customDisplayName,
           provider: 'CUSTOM',
           imapHost: resolvedImapHost,
           imapPort: Number(customMailConfig.imapPort) || 993,
@@ -1805,6 +1825,9 @@ function WorkspaceShellContent() {
           smtpUser: resolvedSmtpUser,
           smtpPassword: customMailConfig.imapPassword,
           smtpTls: customMailConfig.smtpTls,
+          workspaceId: workspaceId || undefined,
+          channelId: isSharedMail && effectiveChannelId ? effectiveChannelId : undefined,
+          isShared: isSharedMail,
         }),
       });
 
@@ -1814,6 +1837,12 @@ function WorkspaceShellContent() {
       }
 
       setShowConnectMailModal(false);
+      setConnectEmailInput('');
+      setNewGroupChannelName('');
+      setGroupAssignMode('existing');
+      setGroupSelectedMemberIds([]);
+      setGroupOriginalMemberIds([]);
+      setGroupMemberSearch('');
       setCustomMailConfig({
         emailAddress: '',
         displayName: '',
@@ -1832,7 +1861,11 @@ function WorkspaceShellContent() {
       setSelectedMailAccountId(data.id);
       setMailFolder('INBOX');
       await loadMailMessages(data.id, 'INBOX');
-      setCallNotificationMsg(`Connected corporate mailbox: ${data.emailAddress}`);
+      setCallNotificationMsg(
+        isSharedMail
+          ? `Connected group mailbox #${channelName}: ${data.emailAddress}`
+          : `Connected corporate mailbox: ${data.emailAddress}`
+      );
       setTimeout(() => setCallNotificationMsg(null), 4000);
     } catch (err: any) {
       setCustomMailError(err?.message || 'Connection failed. Please verify server host, port, and password.');
@@ -13970,8 +14003,8 @@ function WorkspaceShellContent() {
                   </div>
                 )}
 
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div className="col-span-2">
+                <div className="space-y-3">
+                  <div>
                     <label className="block text-[11px] font-bold text-slate-700 mb-1">
                       Work Email Address *
                     </label>
@@ -13979,29 +14012,24 @@ function WorkspaceShellContent() {
                       type="email"
                       required
                       value={customMailConfig.emailAddress}
-                      onChange={(e) =>
-                        setCustomMailConfig((prev) => ({
-                          ...prev,
-                          emailAddress: e.target.value,
-                          imapHost: prev.imapHost || (e.target.value.includes('@') ? `mail.${e.target.value.split('@')[1]}` : ''),
-                          smtpHost: prev.smtpHost || (e.target.value.includes('@') ? `mail.${e.target.value.split('@')[1]}` : ''),
-                        }))
-                      }
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        const domain = val.includes('@') ? val.split('@')[1].trim() : '';
+                        setCustomMailConfig((prev) => {
+                          const shouldAutoImap = !prev.imapHost || prev.imapHost.startsWith('mail.') || prev.imapHost.startsWith('imap.');
+                          const shouldAutoSmtp = !prev.smtpHost || prev.smtpHost.startsWith('mail.') || prev.smtpHost.startsWith('smtp.');
+                          return {
+                            ...prev,
+                            emailAddress: val,
+                            imapHost: domain ? (shouldAutoImap ? `mail.${domain}` : prev.imapHost) : prev.imapHost,
+                            smtpHost: domain ? (shouldAutoSmtp ? `mail.${domain}` : prev.smtpHost) : prev.smtpHost,
+                            imapPort: prev.imapPort || 993,
+                            smtpPort: prev.smtpPort || 587,
+                          };
+                        });
+                      }}
                       placeholder="you@company.com"
-                      className="w-full px-3 py-1.5 rounded-xl border border-slate-200 text-xs text-slate-900 focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                      Display Name
-                    </label>
-                    <input
-                      type="text"
-                      value={customMailConfig.displayName}
-                      onChange={(e) => setCustomMailConfig((prev) => ({ ...prev, displayName: e.target.value }))}
-                      placeholder="e.g. Alex Miller"
-                      className="w-full px-3 py-1.5 rounded-xl border border-slate-200 text-xs text-slate-900 focus:outline-none focus:border-indigo-500"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs text-slate-900 focus:outline-none focus:border-indigo-500 font-medium"
                     />
                   </div>
 
@@ -14021,30 +14049,8 @@ function WorkspaceShellContent() {
                         }))
                       }
                       placeholder="Account or App Password"
-                      className="w-full px-3 py-1.5 rounded-xl border border-slate-200 text-xs text-slate-900 focus:outline-none focus:border-indigo-500"
+                      className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs text-slate-900 focus:outline-none focus:border-indigo-500 font-medium"
                     />
-                  </div>
-
-                  <div className="col-span-2">
-                    <label className="block text-[11px] font-bold text-slate-700 mb-0.5">
-                      Login Username <span className="text-slate-400 font-normal">(Optional — if different from email)</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={customMailConfig.imapUser}
-                      onChange={(e) =>
-                        setCustomMailConfig((prev) => ({
-                          ...prev,
-                          imapUser: e.target.value,
-                          smtpUser: e.target.value,
-                        }))
-                      }
-                      placeholder="e.g. ayush.zala (leave empty to use full email address)"
-                      className="w-full px-3 py-1.5 rounded-xl border border-slate-200 text-xs text-slate-900 focus:outline-none focus:border-indigo-500"
-                    />
-                    <p className="text-[10px] text-slate-400 mt-0.5">
-                      If your mail server requires a username like <span className="font-mono text-slate-600">ayush.zala</span> instead of full email, enter it here.
-                    </p>
                   </div>
                 </div>
 
@@ -14070,21 +14076,20 @@ function WorkspaceShellContent() {
                       )}
                     </div>
                   </button>
-
-                  {!showAdvancedServerSettings && customMailConfig.emailAddress.includes('@') && (
-                    <p className="text-[10px] text-slate-400 mt-1 px-1">
-                      Auto-configured: <span className="font-mono text-slate-600">{customMailConfig.imapHost || `mail.${customMailConfig.emailAddress.split('@')[1]}`}</span> (SSL Ports 993 & 465)
-                    </p>
-                  )}
                 </div>
 
                 {showAdvancedServerSettings && (
                   <div className="space-y-2.5 animate-in fade-in duration-200">
                     {/* IMAP Server Settings */}
                     <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
-                      <p className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">
-                        Incoming Mail Server (IMAP)
-                      </p>
+                      <div className="flex items-center justify-between">
+                        <p className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">
+                          Incoming Mail Server (IMAP)
+                        </p>
+                        <span className="text-[10px] text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
+                          SSL / TLS (993)
+                        </span>
+                      </div>
                       <div className="grid grid-cols-3 gap-2">
                         <div className="col-span-2">
                           <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
@@ -14095,7 +14100,7 @@ function WorkspaceShellContent() {
                             value={customMailConfig.imapHost}
                             onChange={(e) => setCustomMailConfig((prev) => ({ ...prev, imapHost: e.target.value }))}
                             placeholder="mail.company.com"
-                            className="w-full px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-xs text-slate-900 focus:outline-none focus:border-indigo-500"
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs text-slate-900 font-mono focus:outline-none focus:border-indigo-500"
                           />
                         </div>
                         <div>
@@ -14107,7 +14112,7 @@ function WorkspaceShellContent() {
                             value={customMailConfig.imapPort}
                             onChange={(e) => setCustomMailConfig((prev) => ({ ...prev, imapPort: Number(e.target.value) }))}
                             placeholder="993"
-                            className="w-full px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-xs text-slate-900 focus:outline-none focus:border-indigo-500"
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs text-slate-900 font-mono focus:outline-none focus:border-indigo-500"
                           />
                         </div>
                       </div>
@@ -14115,9 +14120,14 @@ function WorkspaceShellContent() {
 
                     {/* SMTP Server Settings */}
                     <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
-                      <p className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">
-                        Outgoing Mail Server (SMTP)
-                      </p>
+                      <div className="flex items-center justify-between">
+                        <p className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">
+                          Outgoing Mail Server (SMTP)
+                        </p>
+                        <span className="text-[10px] text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-100">
+                          STARTTLS (587) / SSL (465)
+                        </span>
+                      </div>
                       <div className="grid grid-cols-3 gap-2">
                         <div className="col-span-2">
                           <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
@@ -14127,8 +14137,8 @@ function WorkspaceShellContent() {
                             type="text"
                             value={customMailConfig.smtpHost}
                             onChange={(e) => setCustomMailConfig((prev) => ({ ...prev, smtpHost: e.target.value }))}
-                            placeholder="smtp.company.com"
-                            className="w-full px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-xs text-slate-900 focus:outline-none focus:border-indigo-500"
+                            placeholder="mail.company.com"
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs text-slate-900 font-mono focus:outline-none focus:border-indigo-500"
                           />
                         </div>
                         <div>
@@ -14140,10 +14150,13 @@ function WorkspaceShellContent() {
                             value={customMailConfig.smtpPort}
                             onChange={(e) => setCustomMailConfig((prev) => ({ ...prev, smtpPort: Number(e.target.value) }))}
                             placeholder="587"
-                            className="w-full px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-xs text-slate-900 focus:outline-none focus:border-indigo-500"
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs text-slate-900 font-mono focus:outline-none focus:border-indigo-500"
                           />
                         </div>
                       </div>
+                      <p className="text-[10px] text-slate-400 leading-tight">
+                        Standard outgoing port is <span className="font-semibold text-slate-600">587</span> (STARTTLS) or <span className="font-semibold text-slate-600">465</span> (SSL). Both are supported.
+                      </p>
                     </div>
                   </div>
                 )}

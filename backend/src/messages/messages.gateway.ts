@@ -11,8 +11,7 @@ import { Server, Socket } from 'socket.io';
 import { Logger, OnModuleInit } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { MessagesService } from './messages.service.js';
-import { PrismaService } from '../common/prisma.service.js';
-import { PresenceStatus } from '@prisma/client';
+import { PrismaService, PresenceStatus } from '../common/prisma.service.js';
 
 @WebSocketGateway({
   cors: {

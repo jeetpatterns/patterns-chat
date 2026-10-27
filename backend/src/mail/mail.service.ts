@@ -587,7 +587,7 @@ export class MailService {
           const transporter = nodemailer.createTransport({
             host: data.smtpHost.trim(),
             port,
-            secure: port === 465 || port === 587,
+            secure: port === 465,
             auth: {
               user: data.smtpUser?.trim() || cleanEmail,
               pass: data.smtpPassword,
@@ -1387,10 +1387,11 @@ export class MailService {
     // If custom company email with SMTP credentials, dispatch live via SMTP
     if (account.provider === EmailProvider.CUSTOM && (account as any).smtpHost && (account as any).smtpPassword) {
       try {
+        const smtpPort = Number((account as any).smtpPort) || 587;
         const transporter = nodemailer.createTransport({
           host: (account as any).smtpHost,
-          port: (account as any).smtpPort || 587,
-          secure: (account as any).smtpPort === 465 || (account as any).smtpPort === 587 || (account as any).smtpTls !== false,
+          port: smtpPort,
+          secure: smtpPort === 465,
           auth: {
             user: (account as any).smtpUser || account.emailAddress,
             pass: (account as any).smtpPassword,

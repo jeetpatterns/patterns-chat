@@ -16,6 +16,14 @@ export enum EmailFolder {
   ARCHIVE = 'ARCHIVE',
 }
 
+export const PresenceStatus = {
+  ONLINE: 'ONLINE',
+  AWAY: 'AWAY',
+  BUSY: 'BUSY',
+  OFFLINE: 'OFFLINE',
+} as const;
+export type PresenceStatus = (typeof PresenceStatus)[keyof typeof PresenceStatus];
+
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PrismaService.name);
