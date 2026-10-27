@@ -549,27 +549,48 @@ export class MailService {
 
     // Verify IMAP connection if credentials provided
     if (data.imapHost && data.imapPassword) {
-      const client = new ImapFlow({
-        host: data.imapHost.trim(),
-        port: data.imapPort || 993,
-        secure: data.imapTls !== false,
-        auth: {
-          user: data.imapUser?.trim() || cleanEmail,
-          pass: data.imapPassword,
-        },
-        tls: {
-          rejectUnauthorized: false,
-        },
-        logger: false,
-      });
+      const preferredUser = data.imapUser?.trim() || cleanEmail;
+      const candidateUsers = Array.from(new Set([preferredUser, cleanEmail, cleanEmail.split('@')[0]]));
 
-      try {
-        await client.connect();
-        await client.logout();
-      } catch (err: any) {
-        const detail = err?.responseText || err?.message || 'Invalid username, password, or server settings';
+      let imapConnected = false;
+      let lastImapError: any = null;
+      let workingUser = preferredUser;
+
+      for (const userCandidate of candidateUsers) {
+        const client = new ImapFlow({
+          host: data.imapHost.trim(),
+          port: data.imapPort || 993,
+          secure: data.imapTls !== false,
+          auth: {
+            user: userCandidate,
+            pass: data.imapPassword,
+          },
+          tls: {
+            rejectUnauthorized: false,
+          },
+          logger: false,
+        });
+
+        try {
+          await client.connect();
+          await client.logout();
+          workingUser = userCandidate;
+          imapConnected = true;
+          break;
+        } catch (err: any) {
+          lastImapError = err;
+        }
+      }
+
+      if (!imapConnected) {
+        let detail = lastImapError?.responseText || lastImapError?.message || 'Invalid username, password, or server settings';
+        if (detail.includes('Unexpected close')) {
+          detail = `Server closed connection (${data.imapHost} rejected IMAP login with "Login rejected for this user"). Please check if IMAP is enabled on this account in your Zimbra / Webmail settings, or use an Application Passcode if Two-Factor Authentication (2FA) is enabled.`;
+        }
         throw new BadRequestException(`IMAP verification failed: ${detail}`);
       }
+
+      data.imapUser = workingUser;
     }
 
     // Verify SMTP connection if credentials provided
@@ -577,35 +598,38 @@ export class MailService {
       const preferredPort = Number(data.smtpPort) || 587;
       const candidatePorts = preferredPort === 465 ? [465, 587] : [preferredPort, 587, 465];
       const uniquePorts = Array.from(new Set(candidatePorts));
+      const preferredUser = data.smtpUser?.trim() || cleanEmail;
+      const candidateUsers = Array.from(new Set([preferredUser, cleanEmail, cleanEmail.split('@')[0]]));
 
       let smtpVerified = false;
       let lastSmtpError: any = null;
       let workingPort = preferredPort;
+      let workingUser = preferredUser;
 
-      for (const port of uniquePorts) {
-        try {
-          const transporter = nodemailer.createTransport({
-            host: data.smtpHost.trim(),
-            port,
-            secure: port === 465,
-            auth: {
-              user: data.smtpUser?.trim() || cleanEmail,
-              pass: data.smtpPassword,
-            },
-            tls: {
-              rejectUnauthorized: false,
-            },
-          });
+      outerLoop:
+      for (const userCandidate of candidateUsers) {
+        for (const port of uniquePorts) {
+          try {
+            const transporter = nodemailer.createTransport({
+              host: data.smtpHost.trim(),
+              port,
+              secure: port === 465,
+              auth: {
+                user: userCandidate,
+                pass: data.smtpPassword,
+              },
+              tls: {
+                rejectUnauthorized: false,
+              },
+            });
 
-          await transporter.verify();
-          workingPort = port;
-          smtpVerified = true;
-          break;
-        } catch (err: any) {
-          lastSmtpError = err;
-          // If server explicitly rejected credentials (e.g. 535 Invalid Username or Password), don't mask it with connection errors on other ports
-          if (err?.responseCode === 535 || err?.message?.toLowerCase().includes('auth') || err?.message?.toLowerCase().includes('password')) {
-            break;
+            await transporter.verify();
+            workingPort = port;
+            workingUser = userCandidate;
+            smtpVerified = true;
+            break outerLoop;
+          } catch (err: any) {
+            lastSmtpError = err;
           }
         }
       }
@@ -617,6 +641,7 @@ export class MailService {
       }
 
       data.smtpPort = workingPort;
+      data.smtpUser = workingUser;
     }
 
     const savedAccount = await this.upsertAccountAndSeed(userId, {
