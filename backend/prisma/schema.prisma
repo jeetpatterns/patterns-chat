@@ -339,6 +339,7 @@ enum EmailFolder {
   STARRED
   TRASH
   ARCHIVE
+  SPAM
 }
 
 model EmailAccount {

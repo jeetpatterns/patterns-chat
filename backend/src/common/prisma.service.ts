@@ -14,6 +14,7 @@ export enum EmailFolder {
   STARRED = 'STARRED',
   TRASH = 'TRASH',
   ARCHIVE = 'ARCHIVE',
+  SPAM = 'SPAM',
 }
 
 export const PresenceStatus = {

@@ -168,6 +168,7 @@ export interface EmailAccountItem {
   sentCount?: number;
   draftsCount?: number;
   trashCount?: number;
+  spamCount?: number;
   lastSyncedAt?: string;
   createdAt: string;
 }
@@ -176,7 +177,7 @@ export interface EmailMessageItem {
   id: string;
   accountId: string;
   externalMessageId: string;
-  folder: 'INBOX' | 'SENT' | 'DRAFTS' | 'STARRED' | 'TRASH';
+  folder: 'INBOX' | 'SENT' | 'DRAFTS' | 'STARRED' | 'TRASH' | 'SPAM';
   fromName?: string;
   fromAddress: string;
   toAddresses: string[];
@@ -832,7 +833,7 @@ function WorkspaceShellContent() {
 
   const [mailAccounts, setMailAccounts] = useState<EmailAccountItem[]>([]);
   const [selectedMailAccountId, setSelectedMailAccountId] = useState<string | null>(null);
-  const [mailFolder, setMailFolder] = useState<'INBOX' | 'STARRED' | 'SENT' | 'DRAFTS' | 'TRASH'>('INBOX');
+  const [mailFolder, setMailFolder] = useState<'INBOX' | 'STARRED' | 'SENT' | 'DRAFTS' | 'TRASH' | 'SPAM'>('INBOX');
   const [mailMessages, setMailMessages] = useState<EmailMessageItem[]>([]);
   const [selectedEmail, setSelectedEmail] = useState<EmailMessageItem | null>(null);
   const [isMailLoading, setIsMailLoading] = useState(false);
@@ -1434,6 +1435,38 @@ function WorkspaceShellContent() {
       }
     } catch (e) {
       console.error('Failed to delete email:', e);
+    }
+  }
+
+  async function handleMoveToFolder(messageId: string, folder: 'INBOX' | 'SPAM' | 'TRASH') {
+    if (!token) return;
+    try {
+      const res = await fetch(`${API_URL}/mail/messages/${messageId}/folder`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ folder }),
+      });
+      if (res.ok) {
+        setMailMessages((prev) => prev.filter((m) => m.id !== messageId));
+        if (selectedEmail?.id === messageId) {
+          setSelectedEmail(null);
+          setShowEmailDetailsModal(false);
+        }
+        loadMailAccounts();
+        setCallNotificationMsg(
+          folder === 'INBOX'
+            ? 'Email moved to Inbox (marked not spam).'
+            : folder === 'SPAM'
+            ? 'Email moved to Spam folder.'
+            : 'Email moved to Trash.'
+        );
+        setTimeout(() => setCallNotificationMsg(null), 3000);
+      }
+    } catch (err) {
+      console.error('Failed to move message folder:', err);
     }
   }
 
@@ -6865,6 +6898,7 @@ function WorkspaceShellContent() {
                     { key: 'STARRED', label: 'Starred', icon: Star, count: selectedMailAccount?.starredCount || 0 },
                     { key: 'SENT', label: 'Sent', icon: Send, count: selectedMailAccount?.sentCount || 0 },
                     { key: 'DRAFTS', label: 'Drafts', icon: FileText, count: selectedMailAccount?.draftsCount || 0 },
+                    { key: 'SPAM', label: 'Spam', icon: AlertCircle, count: selectedMailAccount?.spamCount || 0 },
                     { key: 'TRASH', label: 'Trash', icon: Trash2, count: selectedMailAccount?.trashCount || 0 },
                   ].map((f) => {
                     const Icon = f.icon;
@@ -6875,7 +6909,7 @@ function WorkspaceShellContent() {
                         type="button"
                         onClick={() => {
                           setMailFolder(f.key as any);
-                          if (f.key === 'SENT' || f.key === 'DRAFTS' || f.key === 'TRASH') {
+                          if (f.key === 'SENT' || f.key === 'DRAFTS' || f.key === 'TRASH' || f.key === 'SPAM') {
                             setMailStatusFilter('all');
                           }
                           setSelectedEmail(null);
@@ -7020,36 +7054,36 @@ function WorkspaceShellContent() {
                                     </span>
                                   )}
                                 </div>
-                                <div className="flex items-center gap-1.5 mt-0.5 min-w-0">
-                                  <p className="truncate text-[10px] text-slate-400 font-mono leading-tight">{acc.emailAddress}</p>
+                                  <p className="truncate text-[10px] text-slate-400 font-mono leading-tight mt-0.5">{acc.emailAddress}</p>
                                   {acc.allowedDomains && acc.allowedDomains.length > 0 && (
-                                    canManageGroupMail ? (
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          handleOpenDomainFilterModal(acc);
-                                        }}
-                                        className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-[8.5px] font-bold text-indigo-700 shrink-0 cursor-pointer transition-colors"
-                                        title={`Allowed client domains: ${acc.allowedDomains.map((d) => '@' + d.replace(/^@/, '')).join(', ')} (Click to configure)`}
-                                      >
-                                        <Shield className="w-2.5 h-2.5 text-indigo-600" />
-                                        <span>@{acc.allowedDomains[0].replace(/^@/, '')}{acc.allowedDomains.length > 1 ? ` +${acc.allowedDomains.length - 1}` : ''}</span>
-                                        <Settings className="w-2 h-2 text-indigo-400 ml-0.5" />
-                                      </button>
-                                    ) : (
-                                      <span
-                                        className="inline-flex items-center gap-0.5 px-1 py-0.2 rounded bg-indigo-50 border border-indigo-200/80 text-[8px] font-bold text-indigo-700 shrink-0"
-                                        title={`Allowed client domains: ${acc.allowedDomains.map((d) => '@' + d.replace(/^@/, '')).join(', ')}`}
-                                      >
-                                        <Shield className="w-2.5 h-2.5 text-indigo-600" />
-                                        <span>@{acc.allowedDomains[0].replace(/^@/, '')}{acc.allowedDomains.length > 1 ? ` +${acc.allowedDomains.length - 1}` : ''}</span>
-                                      </span>
-                                    )
+                                    <div className="mt-1">
+                                      {canManageGroupMail ? (
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            handleOpenDomainFilterModal(acc);
+                                          }}
+                                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-indigo-50 hover:bg-indigo-100 border border-indigo-200/80 text-[8.5px] font-bold text-indigo-700 max-w-full cursor-pointer transition-colors shadow-2xs"
+                                          title={`Allowed client domains: ${acc.allowedDomains.map((d) => '@' + d.replace(/^@/, '')).join(', ')} (Click to configure)`}
+                                        >
+                                          <Shield className="w-2.5 h-2.5 text-indigo-600 shrink-0" />
+                                          <span className="truncate">@{acc.allowedDomains[0].replace(/^@/, '')}{acc.allowedDomains.length > 1 ? ` +${acc.allowedDomains.length - 1}` : ''}</span>
+                                          <Settings className="w-2.5 h-2.5 text-indigo-400 shrink-0 ml-0.5" />
+                                        </button>
+                                      ) : (
+                                        <span
+                                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-indigo-50 border border-indigo-200/80 text-[8.5px] font-bold text-indigo-700 max-w-full"
+                                          title={`Allowed client domains: ${acc.allowedDomains.map((d) => '@' + d.replace(/^@/, '')).join(', ')}`}
+                                        >
+                                          <Shield className="w-2.5 h-2.5 text-indigo-600 shrink-0" />
+                                          <span className="truncate">@{acc.allowedDomains[0].replace(/^@/, '')}{acc.allowedDomains.length > 1 ? ` +${acc.allowedDomains.length - 1}` : ''}</span>
+                                        </span>
+                                      )}
+                                    </div>
                                   )}
                                 </div>
                               </div>
-                            </div>
                             <div className="flex items-center gap-1 shrink-0">
                               {acc.unhandledCount !== undefined && acc.unhandledCount > 0 && (
                                 <span className="px-1.5 py-0.5 rounded-full bg-amber-500 text-white text-[8px] font-black shadow-2xs" title="Needs Action by team">
@@ -7263,6 +7297,26 @@ function WorkspaceShellContent() {
                     >
                       <Mail className="w-4 h-4" />
                     </button>
+                    {selectedEmail.folder === 'SPAM' || mailFolder === 'SPAM' ? (
+                      <button
+                        type="button"
+                        onClick={() => handleMoveToFolder(selectedEmail.id, 'INBOX')}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold transition-all shadow-2xs cursor-pointer"
+                        title="Mark as Not Spam (Move to Inbox)"
+                      >
+                        <Inbox className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Not Spam</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleMoveToFolder(selectedEmail.id, 'SPAM')}
+                        className="p-2 rounded-xl text-slate-400 hover:text-amber-700 hover:bg-amber-50 transition-colors cursor-pointer"
+                        title="Move to Spam"
+                      >
+                        <AlertCircle className="w-4 h-4 text-amber-500" />
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => handleDeleteEmail(selectedEmail.id)}
@@ -7779,7 +7833,7 @@ function WorkspaceShellContent() {
               /* ── 2. GMAIL FULL-WIDTH ALL MAILS LIST VIEW (Only All Mail) ── */
               <div className="flex-1 flex flex-col bg-white min-w-0 overflow-hidden relative">
                 {/* Full-width Gmail Header Toolbar */}
-                <header className="h-16 px-4 sm:px-6 border-b border-slate-100 bg-white flex items-center justify-between shrink-0 z-10">
+                <header className="min-h-16 py-2 px-3 sm:px-6 border-b border-slate-100 bg-white flex flex-wrap items-center justify-between gap-2.5 shrink-0 z-10">
                   {/* Left: Folder Title & Badge */}
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="h-9 w-9 rounded-xl bg-indigo-50 border border-indigo-200/80 flex items-center justify-center text-indigo-600 shadow-2xs shrink-0">
@@ -7791,6 +7845,8 @@ function WorkspaceShellContent() {
                         <FileText className="h-4.5 w-4.5" />
                       ) : mailFolder === 'TRASH' ? (
                         <Trash2 className="h-4.5 w-4.5" />
+                      ) : mailFolder === 'SPAM' ? (
+                        <AlertCircle className="h-4.5 w-4.5 text-amber-600" />
                       ) : (
                         <Inbox className="h-4.5 w-4.5" />
                       )}
@@ -7798,7 +7854,7 @@ function WorkspaceShellContent() {
                     <div className="flex flex-col min-w-0 justify-center">
                       <div className="flex items-center gap-2">
                         <span className="font-black text-slate-900 text-sm tracking-tight capitalize leading-tight">
-                          {mailFolder === 'SENT' ? 'Sent' : mailFolder === 'INBOX' ? 'Inbox' : mailFolder.toLowerCase()}
+                          {mailFolder === 'SENT' ? 'Sent' : mailFolder === 'INBOX' ? 'Inbox' : mailFolder === 'SPAM' ? 'Spam' : mailFolder.toLowerCase()}
                         </span>
                         {mailDateFilter !== 'all' ? (
                           <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-2xs">
@@ -8100,6 +8156,23 @@ function WorkspaceShellContent() {
                   </div>
                 </header>
 
+                {/* SPAM Folder Advisory Banner */}
+                {mailFolder === 'SPAM' && (
+                  <div className="mx-4 sm:mx-6 my-2.5 p-3 rounded-2xl bg-amber-50/90 border border-amber-200/90 text-amber-950 text-xs flex items-center justify-between gap-3 shadow-2xs">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-8 h-8 rounded-xl bg-amber-100 flex items-center justify-center text-amber-700 shrink-0">
+                        <AlertCircle className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-bold text-amber-950 text-xs">Spam / Junk Mailbox Folder</p>
+                        <p className="text-[11px] text-amber-800 leading-tight">
+                          Emails here were flagged as spam by your email provider. If a legitimate client message or order is here, click <strong>Not Spam</strong> to restore it to your Inbox.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {/* Mobile Filter Sub-bar */}
                 <div className="md:hidden px-4 py-2 border-b border-slate-100 bg-white flex items-center justify-between gap-2 overflow-x-auto">
                   <div className="flex items-center gap-1">
@@ -8340,6 +8413,31 @@ function WorkspaceShellContent() {
                               >
                                 <Mail className="w-3.5 h-3.5" />
                               </button>
+                              {mailFolder === 'SPAM' ? (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleMoveToFolder(msg.id, 'INBOX');
+                                  }}
+                                  className="p-1 text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 rounded transition-colors"
+                                  title="Not Spam (Move to Inbox)"
+                                >
+                                  <Inbox className="w-3.5 h-3.5 text-emerald-600" />
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleMoveToFolder(msg.id, 'SPAM');
+                                  }}
+                                  className="p-1 text-slate-400 hover:text-amber-700 hover:bg-amber-50 rounded transition-colors"
+                                  title="Move to Spam"
+                                >
+                                  <AlertCircle className="w-3.5 h-3.5 text-amber-500" />
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={(e) => {

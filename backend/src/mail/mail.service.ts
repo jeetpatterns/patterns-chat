@@ -223,6 +223,7 @@ export class MailService implements OnModuleInit {
       let sent = 0;
       let drafts = 0;
       let trash = 0;
+      let spam = 0;
       let unhandledCount = 0;
       let handledCount = 0;
 
@@ -241,6 +242,8 @@ export class MailService implements OnModuleInit {
             drafts += count;
           } else if (row.folder === 'TRASH') {
             trash += count;
+          } else if (row.folder === 'SPAM') {
+            spam += count;
           }
         }
       }
@@ -289,6 +292,7 @@ export class MailService implements OnModuleInit {
         sentCount: sent,
         draftsCount: drafts,
         trashCount: trash,
+        spamCount: spam,
         lastSyncedAt: acc.lastSyncedAt,
         createdAt: acc.createdAt,
       };
@@ -1404,6 +1408,36 @@ export class MailService implements OnModuleInit {
     return updated;
   }
 
+  // Move email between folders (e.g. INBOX <-> SPAM, TRASH, etc.)
+  async moveMessageFolder(userId: string, messageId: string, targetFolder: EmailFolder) {
+    const message = await this.prisma.emailMessage.findUnique({
+      where: { id: messageId },
+      include: { account: true },
+    });
+
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+
+    await this.validateAccountAccess(userId, message.accountId);
+
+    const updated = await this.prisma.emailMessage.update({
+      where: { id: messageId },
+      data: { folder: targetFolder },
+    });
+
+    // If moving from SPAM to INBOX on Google, remove SPAM label and add INBOX label
+    if (message.account?.provider === EmailProvider.GOOGLE && message.externalMessageId) {
+      if (targetFolder === EmailFolder.INBOX && message.folder === EmailFolder.SPAM) {
+        this.syncLabelToGmail(message.account, message.externalMessageId, ['INBOX'], ['SPAM']).catch(() => {});
+      } else if (targetFolder === EmailFolder.SPAM) {
+        this.syncLabelToGmail(message.account, message.externalMessageId, ['SPAM'], ['INBOX']).catch(() => {});
+      }
+    }
+
+    return { success: true, folder: updated.folder, message: updated };
+  }
+
   // Send new email (or reply on behalf of group mailbox) with full attachment support
   async sendMessage(
     userId: string,
@@ -2229,6 +2263,32 @@ export class MailService implements OnModuleInit {
         console.warn('Failed to fetch Gmail sent messages query:', err);
       }
 
+      // Also ensure latest spam messages are fetched from Gmail
+      try {
+        let spamUrl = 'https://gmail.googleapis.com/gmail/v1/users/me/messages?q=in:spam&maxResults=25&includeSpamTrash=true';
+        if (account.isShared && account.allowedDomains && account.allowedDomains.length > 0) {
+          const cleanList = account.allowedDomains.map((d: string) => d.replace(/^@/, '').trim()).filter(Boolean);
+          if (cleanList.length > 0) {
+            const qStr = cleanList.map((d: string) => `from:(*@${d}) OR to:(*@${d})`).join(' OR ');
+            spamUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=in:spam+(${encodeURIComponent(qStr)})&maxResults=25&includeSpamTrash=true`;
+          }
+        }
+        const spamRes = await fetch(spamUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
+        if (spamRes.ok) {
+          const spamData = await spamRes.json();
+          const spamRefs: Array<{ id: string; threadId: string }> = spamData.messages || [];
+          const existingIds = new Set(messageRefs.map((m: any) => m.id));
+          for (const sRef of spamRefs) {
+            if (!existingIds.has(sRef.id)) {
+              messageRefs.push(sRef);
+              existingIds.add(sRef.id);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to fetch Gmail spam messages query:', err);
+      }
+
       if (messageRefs.length === 0) {
         return { syncedCount: 0 };
       }
@@ -2324,6 +2384,7 @@ export class MailService implements OnModuleInit {
               if (labels.includes('SENT')) folder = EmailFolder.SENT;
               else if (labels.includes('DRAFT')) folder = EmailFolder.DRAFTS;
               else if (labels.includes('TRASH')) folder = EmailFolder.TRASH;
+              else if (labels.includes('SPAM')) folder = EmailFolder.SPAM;
               else if (labels.includes('INBOX')) folder = EmailFolder.INBOX;
 
               const isStarred = labels.includes('STARRED');

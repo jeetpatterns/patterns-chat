@@ -193,6 +193,15 @@ export class MailController {
     return this.mailService.toggleStar(user.id, id);
   }
 
+  @Patch('messages/:id/folder')
+  async moveMessageFolder(
+    @CurrentUser() user: { id: string },
+    @Param('id') id: string,
+    @Body('folder') folder: string,
+  ) {
+    return this.mailService.moveMessageFolder(user.id, id, folder as any);
+  }
+
   @Delete('messages/:id')
   async deleteMessage(
     @CurrentUser() user: { id: string },
