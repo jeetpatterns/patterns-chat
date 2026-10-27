@@ -22,6 +22,8 @@ export class MailService implements OnModuleInit {
   private googleTokenExpiry = new Map<string, number>();
 
   // Injected Prisma Service and Messages Gateway
+  private syncingAccounts = new Set<string>();
+
   constructor(
     private readonly prisma: PrismaService,
     @Inject(forwardRef(() => MessagesGateway))
@@ -39,8 +41,84 @@ export class MailService implements OnModuleInit {
           allowedDomains: ['patterns247.net'],
         },
       });
+
+      // Purge any duplicate messages in the system
+      await this.purgeDuplicateMessages();
+
+      // Purge stale non-domain emails from shared accounts
+      const sharedAccs = await this.prisma.emailAccount.findMany({
+        where: { isShared: true },
+        select: { id: true, isShared: true, allowedDomains: true },
+      });
+      for (const sAcc of sharedAccs) {
+        await this.purgeNonAllowedMessages(sAcc);
+      }
     } catch (err: any) {
       console.warn('Init allowedDomains check:', err?.message || err);
+    }
+  }
+
+  // Helper to remove any duplicate messages with identical (accountId, externalMessageId)
+  async purgeDuplicateMessages(accountId?: string) {
+    try {
+      const allMsgs = await this.prisma.emailMessage.findMany({
+        where: accountId ? { accountId } : {},
+        select: { id: true, accountId: true, externalMessageId: true, receivedAt: true },
+        orderBy: { receivedAt: 'desc' },
+      });
+
+      const seen = new Set<string>();
+      const duplicateIds: string[] = [];
+
+      for (const msg of allMsgs) {
+        const key = `${msg.accountId}_${msg.externalMessageId}`;
+        if (seen.has(key)) {
+          duplicateIds.push(msg.id);
+        } else {
+          seen.add(key);
+        }
+      }
+
+      if (duplicateIds.length > 0) {
+        await this.prisma.emailMessage.deleteMany({
+          where: { id: { in: duplicateIds } },
+        });
+      }
+    } catch (err: any) {
+      console.warn('purgeDuplicateMessages error:', err?.message || err);
+    }
+  }
+
+  // Helper to purge non-allowed messages from a shared group account
+  async purgeNonAllowedMessages(account: { id: string; isShared: boolean; allowedDomains?: string[] }) {
+    try {
+      if (!account.isShared || !account.allowedDomains || account.allowedDomains.length === 0) {
+        return;
+      }
+      const cleanDomains = account.allowedDomains
+        .map((d) => d.replace(/^@/, '').trim().toLowerCase())
+        .filter(Boolean);
+      if (cleanDomains.length === 0) return;
+
+      const allMsgs = await this.prisma.emailMessage.findMany({
+        where: { accountId: account.id },
+        select: { id: true, fromAddress: true, toAddresses: true },
+      });
+
+      const toDeleteIds: string[] = [];
+      for (const m of allMsgs) {
+        if (!this.isEmailAllowed(m.fromAddress, m.toAddresses, cleanDomains)) {
+          toDeleteIds.push(m.id);
+        }
+      }
+
+      if (toDeleteIds.length > 0) {
+        await this.prisma.emailMessage.deleteMany({
+          where: { id: { in: toDeleteIds } },
+        });
+      }
+    } catch (err: any) {
+      console.warn('purgeNonAllowedMessages error:', err?.message || err);
     }
   }
 
@@ -206,6 +284,14 @@ export class MailService implements OnModuleInit {
     }
 
     if (accounts.length === 0) return [];
+
+    // Purge non-allowed domain messages and duplicates so counts are 100% accurate!
+    for (const acc of accounts) {
+      if (acc.isShared && acc.allowedDomains && acc.allowedDomains.length > 0) {
+        await this.purgeNonAllowedMessages(acc);
+      }
+      await this.purgeDuplicateMessages(acc.id);
+    }
 
     const accountIds = accounts.map((a) => a.id);
 
@@ -1041,6 +1127,10 @@ export class MailService implements OnModuleInit {
       },
     });
 
+    // Purge non-matching messages and duplicates immediately from this shared group inbox
+    await this.purgeNonAllowedMessages(updated);
+    await this.purgeDuplicateMessages(accountId);
+
     // Trigger sync in background to fetch emails for newly added domains
     this.syncAccount(userId, accountId).catch((err) => {
       console.warn(`Background sync after allowed domains update failed: ${err.message}`);
@@ -1200,16 +1290,24 @@ export class MailService implements OnModuleInit {
       }),
     ]);
 
-    const formattedMessages = messages.map((m: any) => ({
-      ...m,
-      attachments: (m.attachmentsJson as any[]) || [],
-    }));
+    const seenExternal = new Set<string>();
+    const uniqueMessages: any[] = [];
+    for (const m of messages) {
+      const key = `${m.accountId}_${m.externalMessageId}`;
+      if (!seenExternal.has(key)) {
+        seenExternal.add(key);
+        uniqueMessages.push({
+          ...m,
+          attachments: (m.attachmentsJson as any[]) || [],
+        });
+      }
+    }
 
     return {
-      messages: formattedMessages,
-      total,
+      messages: uniqueMessages,
+      total: uniqueMessages.length,
       page,
-      totalPages: Math.ceil(total / limit),
+      totalPages: Math.ceil(uniqueMessages.length / limit) || 1,
       limit,
     };
   }
@@ -2193,13 +2291,19 @@ export class MailService implements OnModuleInit {
 
   // Live Sync emails from Gmail API into local database
   async syncGmailAccount(account: any): Promise<{ syncedCount: number; requiresReauth?: boolean; error?: string }> {
-    const accessToken = await this.getValidGoogleAccessToken(account);
-    if (!accessToken) {
-      console.warn(`No valid access token available for ${account.emailAddress}`);
-      return { syncedCount: 0, requiresReauth: true, error: 'NO_TOKEN' };
+    if (this.syncingAccounts.has(account.id)) {
+      console.log(`Sync already in progress for ${account.emailAddress}, skipping duplicate concurrent run.`);
+      return { syncedCount: 0 };
     }
+    this.syncingAccounts.add(account.id);
 
     try {
+      const accessToken = await this.getValidGoogleAccessToken(account);
+      if (!accessToken) {
+        console.warn(`No valid access token available for ${account.emailAddress}`);
+        return { syncedCount: 0, requiresReauth: true, error: 'NO_TOKEN' };
+      }
+
       // Fetch latest 100 message IDs from Gmail (filtered by allowed domains if shared group mailbox)
       let listUrl = 'https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=100';
       if (account.isShared && account.allowedDomains && account.allowedDomains.length > 0) {
@@ -2402,10 +2506,12 @@ export class MailService implements OnModuleInit {
                 return;
               }
 
-              const existing = await this.prisma.emailMessage.findFirst({
+              const existing = await this.prisma.emailMessage.findUnique({
                 where: {
-                  accountId: account.id,
-                  externalMessageId: msgData.id,
+                  accountId_externalMessageId: {
+                    accountId: account.id,
+                    externalMessageId: msgData.id,
+                  },
                 },
               });
 
@@ -2449,8 +2555,26 @@ export class MailService implements OnModuleInit {
                   },
                 });
               } else {
-                const created = await this.prisma.emailMessage.create({
-                  data: {
+                const created = await this.prisma.emailMessage.upsert({
+                  where: {
+                    accountId_externalMessageId: {
+                      accountId: account.id,
+                      externalMessageId: msgData.id,
+                    },
+                  },
+                  update: {
+                    folder,
+                    subject,
+                    fromName,
+                    fromAddress,
+                    toAddresses,
+                    ccAddresses,
+                    snippet,
+                    bodyHtml: html || (text ? `<pre style="white-space: pre-wrap; font-family: inherit;">${text}</pre>` : ''),
+                    bodyText: text || snippet,
+                    receivedAt,
+                  },
+                  create: {
                     accountId: account.id,
                     externalMessageId: msgData.id,
                     threadId: msgData.threadId,
@@ -2512,6 +2636,11 @@ export class MailService implements OnModuleInit {
         });
       }
 
+      if (account.isShared) {
+        await this.purgeNonAllowedMessages(account);
+      }
+      await this.purgeDuplicateMessages(account.id);
+
       await this.prisma.emailAccount.update({
         where: { id: account.id },
         data: { lastSyncedAt: new Date() },
@@ -2521,6 +2650,8 @@ export class MailService implements OnModuleInit {
     } catch (e) {
       console.error(`Gmail live sync error for ${account.emailAddress}:`, e);
       return { syncedCount: 0 };
+    } finally {
+      this.syncingAccounts.delete(account.id);
     }
   }
 

@@ -1132,7 +1132,16 @@ function WorkspaceShellContent() {
   }, [activeAppTab, totalUnreadCount, totalUnreadEmails, currentWs?.name]);
 
   const filteredMailMessages = useMemo(() => {
-    return mailMessages.filter((msg) => {
+    const seen = new Set<string>();
+    const deduped = mailMessages.filter((msg) => {
+      if (!msg) return false;
+      const key = `${msg.accountId || ''}_${msg.externalMessageId || msg.id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    return deduped.filter((msg) => {
       // Triage status (unhandled vs done) only applies to INBOX and STARRED
       if (mailFolder === 'INBOX' || mailFolder === 'STARRED') {
         if (mailStatusFilter === 'unhandled' && msg.isHandled) return false;

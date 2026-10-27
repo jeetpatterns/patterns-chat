@@ -416,6 +416,7 @@ model EmailMessage {
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @updatedAt
 
+  @@unique([accountId, externalMessageId])
   @@index([accountId, folder, receivedAt])
   @@index([accountId, isRead])
   @@index([accountId, isHandled])
