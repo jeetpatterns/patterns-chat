@@ -1317,9 +1317,9 @@ export class MailService implements OnModuleInit {
 
     return {
       messages: uniqueMessages,
-      total: uniqueMessages.length,
+      total,
       page,
-      totalPages: Math.ceil(uniqueMessages.length / limit) || 1,
+      totalPages: Math.ceil(total / limit) || 1,
       limit,
     };
   }

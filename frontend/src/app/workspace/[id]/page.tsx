@@ -8399,7 +8399,9 @@ function WorkspaceShellContent() {
                           {mailFolder === 'SENT' ? 'Sent' : mailFolder === 'INBOX' ? 'Inbox' : mailFolder === 'SPAM' ? 'Spam' : mailFolder.toLowerCase()}
                         </span>
                         <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200/70 shrink-0">
-                          {filteredMailMessages.length} emails
+                          {selectedTagFilter !== 'all' || mailDateFilter !== 'all' || emailFilterMode !== 'all'
+                            ? `${filteredMailMessages.length} filtered`
+                            : `${mailTotalMessages || filteredMailMessages.length} emails`}
                         </span>
                         {mailFolder === 'INBOX' && selectedMailAccount?.unreadCount !== undefined && selectedMailAccount.unreadCount > 0 && (
                           <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">
