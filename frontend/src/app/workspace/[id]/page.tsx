@@ -1106,6 +1106,7 @@ function WorkspaceShellContent() {
     fileSize?: number;
   } | null>(null);
   const selectedEmailRef = useRef<EmailMessageItem | null>(null);
+  const locallyUpdatedReads = useRef<Map<string, { isRead: boolean; timestamp: number }>>(new Map());
 
   useEffect(() => {
     selectedEmailRef.current = selectedEmail;
@@ -1452,19 +1453,27 @@ function WorkspaceShellContent() {
 
     // Instantly mark as read in local state without delay
     if (wasUnread) {
+      locallyUpdatedReads.current.set(msg.id, { isRead: true, timestamp: Date.now() });
+
       setMailMessages((prev) =>
         prev.map((m) => (m.id === msg.id ? { ...m, isRead: true } : m)),
       );
       setMailAccounts((prev) =>
-        prev.map((a) =>
-          a.id === msg.accountId
-            ? {
-                ...a,
-                unreadCount: Math.max(0, (a.unreadCount || 1) - 1),
-                inboxUnreadCount: Math.max(0, ((a.inboxUnreadCount ?? a.unreadCount) || 1) - 1),
-              }
-            : a,
-        ),
+        prev.map((a) => {
+          if (a.id === msg.accountId) {
+            const isSpam = msg.folder === 'SPAM' || mailFolder === 'SPAM';
+            if (isSpam) {
+              return { ...a, spamCount: Math.max(0, (a.spamCount || 1) - 1) };
+            }
+            const updated = Math.max(0, (a.unreadCount || 1) - 1);
+            return {
+              ...a,
+              unreadCount: updated,
+              inboxUnreadCount: Math.max(0, ((a.inboxUnreadCount ?? a.unreadCount) || 1) - 1),
+            };
+          }
+          return a;
+        }),
       );
     }
 
@@ -1505,6 +1514,8 @@ function WorkspaceShellContent() {
     const currentMsg = mailMessages.find((m) => m.id === messageId) || selectedEmail;
     const newRead = currentMsg ? !currentMsg.isRead : false;
 
+    locallyUpdatedReads.current.set(messageId, { isRead: newRead, timestamp: Date.now() });
+
     // Optimistically update read status and account unread counts immediately
     setMailMessages((prev) =>
       prev.map((m) => (m.id === messageId ? { ...m, isRead: newRead } : m)),
@@ -1513,11 +1524,16 @@ function WorkspaceShellContent() {
       setSelectedEmail((prev) => (prev ? { ...prev, isRead: newRead } : null));
     }
     const targetAccId = currentMsg?.accountId || selectedMailAccountId;
+    const isSpam = currentMsg?.folder === 'SPAM' || mailFolder === 'SPAM';
     if (targetAccId) {
       setMailAccounts((prev) =>
         prev.map((a) => {
           if (a.id === targetAccId) {
             const delta = newRead ? -1 : 1;
+            if (isSpam) {
+              const updatedSpam = Math.max(0, (a.spamCount || 0) + delta);
+              return { ...a, spamCount: updatedSpam };
+            }
             const updatedCount = Math.max(0, (a.unreadCount || 0) + delta);
             return { ...a, unreadCount: updatedCount, inboxUnreadCount: updatedCount };
           }
@@ -1543,16 +1559,22 @@ function WorkspaceShellContent() {
   async function handleDeleteEmail(messageId: string) {
     const targetMsg = mailMessages.find((m) => m.id === messageId) || selectedEmail;
     if (targetMsg && !targetMsg.isRead && targetMsg.accountId) {
+      const isSpam = targetMsg.folder === 'SPAM' || mailFolder === 'SPAM';
       setMailAccounts((prev) =>
-        prev.map((a) =>
-          a.id === targetMsg.accountId
-            ? {
-                ...a,
-                unreadCount: Math.max(0, (a.unreadCount || 1) - 1),
-                inboxUnreadCount: Math.max(0, ((a.inboxUnreadCount ?? a.unreadCount) || 1) - 1),
-              }
-            : a,
-        ),
+        prev.map((a) => {
+          if (a.id === targetMsg.accountId) {
+            if (isSpam) {
+              return { ...a, spamCount: Math.max(0, (a.spamCount || 1) - 1) };
+            }
+            const updated = Math.max(0, (a.unreadCount || 1) - 1);
+            return {
+              ...a,
+              unreadCount: updated,
+              inboxUnreadCount: Math.max(0, ((a.inboxUnreadCount ?? a.unreadCount) || 1) - 1),
+            };
+          }
+          return a;
+        }),
       );
     }
     setMailMessages((prev) => prev.filter((m) => m.id !== messageId));
@@ -4892,20 +4914,50 @@ function WorkspaceShellContent() {
     function handleEmailReadUpdated(data: {
       messageId: string;
       accountId: string;
+      folder?: string;
       isRead: boolean;
+      readBy?: { id: string };
     }) {
+      const localAction = locallyUpdatedReads.current.get(data.messageId);
+      const isInitiatedLocally = localAction && localAction.isRead === data.isRead;
+      if (localAction) {
+        locallyUpdatedReads.current.delete(data.messageId);
+      }
+
+      let msgFolder = data.folder;
+
       setMailMessages((prev) =>
-        prev.map((m) => (m.id === data.messageId ? { ...m, isRead: data.isRead } : m)),
+        prev.map((m) => {
+          if (m.id === data.messageId) {
+            if (!msgFolder && m.folder) {
+              msgFolder = m.folder;
+            }
+            return { ...m, isRead: data.isRead };
+          }
+          return m;
+        }),
       );
+
       if (selectedEmailRef.current?.id === data.messageId) {
         setSelectedEmail((prev) => (prev ? { ...prev, isRead: data.isRead } : null));
       }
+
+      // If user performed the action in this tab, count was already optimistically updated
+      if (isInitiatedLocally) {
+        return;
+      }
+
+      const delta = data.isRead ? -1 : 1;
       setMailAccounts((prev) =>
         prev.map((a) => {
           if (a.id === data.accountId) {
-            const delta = data.isRead ? -1 : 1;
-            const newCount = Math.max(0, (a.unreadCount || 0) + delta);
-            return { ...a, unreadCount: newCount, inboxUnreadCount: newCount };
+            if (msgFolder === 'SPAM' || data.folder === 'SPAM') {
+              const newSpam = Math.max(0, (a.spamCount || 0) + delta);
+              return { ...a, spamCount: newSpam };
+            } else {
+              const newCount = Math.max(0, (a.unreadCount || 0) + delta);
+              return { ...a, unreadCount: newCount, inboxUnreadCount: newCount };
+            }
           }
           return a;
         }),
@@ -8406,6 +8458,11 @@ function WorkspaceShellContent() {
                         {mailFolder === 'INBOX' && selectedMailAccount?.unreadCount !== undefined && selectedMailAccount.unreadCount > 0 && (
                           <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">
                             {selectedMailAccount.unreadCount} unread
+                          </span>
+                        )}
+                        {mailFolder === 'SPAM' && selectedMailAccount?.spamCount !== undefined && selectedMailAccount.spamCount > 0 && (
+                          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 shrink-0">
+                            {selectedMailAccount.spamCount} unread
                           </span>
                         )}
                       </div>

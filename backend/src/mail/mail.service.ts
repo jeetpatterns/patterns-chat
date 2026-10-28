@@ -329,7 +329,7 @@ export class MailService implements OnModuleInit {
           } else if (row.folder === 'TRASH') {
             trash += count;
           } else if (row.folder === 'SPAM') {
-            spam += count;
+            if (!row.isRead) spam += count;
           }
         }
       }
@@ -404,8 +404,8 @@ export class MailService implements OnModuleInit {
       where: { userId, provider: EmailProvider.GOOGLE, refreshToken: { not: null } },
     });
 
-    // If already authorized before, prompt=select_account enables smooth 1-click connect without security alerts
-    const promptParam = existing ? 'select_account' : 'consent select_account';
+    // Always request consent so Google issues an offline refresh_token for background sync
+    const promptParam = 'consent select_account';
 
     const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(
       clientId,
@@ -1360,21 +1360,22 @@ export class MailService implements OnModuleInit {
       });
       message.isRead = true;
 
-      // Broadcast read update to all team members across devices
+      // Broadcast read update once to all team members across devices
       if (this.messagesGateway?.server) {
         const readPayload = {
           messageId,
           accountId: message.accountId,
+          folder: message.folder,
           isRead: true,
           readBy: { id: userId },
         };
-        if (message.account.channelId) {
-          this.messagesGateway.server.to(`channel:${message.account.channelId}`).emit('email_read_updated', readPayload);
-        }
         if (message.account.workspaceId) {
           this.messagesGateway.server.to(`workspace:${message.account.workspaceId}`).emit('email_read_updated', readPayload);
+        } else if (message.account.channelId) {
+          this.messagesGateway.server.to(`channel:${message.account.channelId}`).emit('email_read_updated', readPayload);
+        } else if (message.account.userId) {
+          this.messagesGateway.server.to(`user:${message.account.userId}`).emit('email_read_updated', readPayload);
         }
-        this.messagesGateway.server.to(`user:${message.account.userId}`).emit('email_read_updated', readPayload);
       }
 
       if (message.account?.provider === EmailProvider.GOOGLE && message.externalMessageId) {
@@ -1407,21 +1408,22 @@ export class MailService implements OnModuleInit {
       data: { isRead: newRead },
     });
 
-    // Broadcast real-time read update to all group members across devices
+    // Broadcast real-time read update once to all group members across devices
     if (this.messagesGateway?.server) {
       const readPayload = {
         messageId,
         accountId: account.id,
+        folder: message.folder,
         isRead: newRead,
         readBy: { id: userId },
       };
-      if (account.channelId) {
-        this.messagesGateway.server.to(`channel:${account.channelId}`).emit('email_read_updated', readPayload);
-      }
       if (account.workspaceId) {
         this.messagesGateway.server.to(`workspace:${account.workspaceId}`).emit('email_read_updated', readPayload);
+      } else if (account.channelId) {
+        this.messagesGateway.server.to(`channel:${account.channelId}`).emit('email_read_updated', readPayload);
+      } else if (account.userId) {
+        this.messagesGateway.server.to(`user:${account.userId}`).emit('email_read_updated', readPayload);
       }
-      this.messagesGateway.server.to(`user:${account.userId}`).emit('email_read_updated', readPayload);
     }
 
     if (message.account?.provider === EmailProvider.GOOGLE && message.externalMessageId) {
@@ -1476,14 +1478,13 @@ export class MailService implements OnModuleInit {
         handledAt: updated.handledAt,
       };
 
-      if (account.channelId) {
-        this.messagesGateway.server.to(`channel:${account.channelId}`).emit('email_handled_updated', payload);
-      }
       if (account.workspaceId) {
         this.messagesGateway.server.to(`workspace:${account.workspaceId}`).emit('email_handled_updated', payload);
+      } else if (account.channelId) {
+        this.messagesGateway.server.to(`channel:${account.channelId}`).emit('email_handled_updated', payload);
+      } else if (account.userId) {
+        this.messagesGateway.server.to(`user:${account.userId}`).emit('email_handled_updated', payload);
       }
-      this.messagesGateway.server.to(`user:${account.userId}`).emit('email_handled_updated', payload);
-      this.messagesGateway.server.to(`user:${userId}`).emit('email_handled_updated', payload);
     }
 
     return updated;
@@ -1976,11 +1977,10 @@ export class MailService implements OnModuleInit {
           handledBy: { id: userId, name: sender?.name },
           handledAt: new Date(),
         };
-        if (account.channelId) {
-          this.messagesGateway.server.to(`channel:${account.channelId}`).emit('email_handled_updated', payload);
-        }
         if (account.workspaceId) {
           this.messagesGateway.server.to(`workspace:${account.workspaceId}`).emit('email_handled_updated', payload);
+        } else if (account.channelId) {
+          this.messagesGateway.server.to(`channel:${account.channelId}`).emit('email_handled_updated', payload);
         }
       }
     }
@@ -1991,11 +1991,10 @@ export class MailService implements OnModuleInit {
         accountId: account.id,
         sentMessage,
       };
-      if (account.channelId) {
-        this.messagesGateway.server.to(`channel:${account.channelId}`).emit('email_sent_updated', sentPayload);
-      }
       if (account.workspaceId) {
         this.messagesGateway.server.to(`workspace:${account.workspaceId}`).emit('email_sent_updated', sentPayload);
+      } else if (account.channelId) {
+        this.messagesGateway.server.to(`channel:${account.channelId}`).emit('email_sent_updated', sentPayload);
       }
     }
 
@@ -2087,9 +2086,11 @@ export class MailService implements OnModuleInit {
       include: { account: true },
     });
 
-    if (!message || message.account.userId !== userId) {
+    if (!message) {
       throw new NotFoundException('Message not found');
     }
+
+    const { account } = await this.validateAccountAccess(userId, message.accountId);
 
     if (message.folder === EmailFolder.TRASH) {
       await this.prisma.emailMessage.delete({ where: { id: messageId } });
