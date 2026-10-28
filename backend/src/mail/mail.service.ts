@@ -1321,6 +1321,7 @@ export class MailService implements OnModuleInit {
       folder?: string;
       status?: 'all' | 'unhandled' | 'done';
       tag?: string;
+      assignee?: string;
       search?: string;
       page?: number;
       limit?: number;
@@ -1387,6 +1388,15 @@ export class MailService implements OnModuleInit {
       where.tags = { has: query.tag };
     }
 
+    // Assignee filter: me, unassigned, or specific user ID
+    if (query.assignee === 'me') {
+      where.assignedToId = userId;
+    } else if (query.assignee === 'unassigned') {
+      where.assignedToId = null;
+    } else if (query.assignee && query.assignee !== 'all') {
+      where.assignedToId = query.assignee;
+    }
+
     if (query.search?.trim()) {
       const q = query.search.trim();
       where.OR = [
@@ -1423,6 +1433,9 @@ export class MailService implements OnModuleInit {
           handledAt: true,
           sentById: true,
           sentByName: true,
+          assignedToId: true,
+          assignedToName: true,
+          assignedAt: true,
           hasAttachments: true,
           attachmentsJson: true,
           tags: true,
@@ -1474,6 +1487,7 @@ export class MailService implements OnModuleInit {
         },
         handledBy: { select: { id: true, name: true, avatarUrl: true } },
         sentBy: { select: { id: true, name: true, avatarUrl: true } },
+        assignedTo: { select: { id: true, name: true, avatarUrl: true } },
       },
     });
 
@@ -1615,6 +1629,68 @@ export class MailService implements OnModuleInit {
         this.messagesGateway.server.to(`channel:${account.channelId}`).emit('email_handled_updated', payload);
       } else if (account.userId) {
         this.messagesGateway.server.to(`user:${account.userId}`).emit('email_handled_updated', payload);
+      }
+    }
+
+    return updated;
+  }
+
+  // Assign email conversation to a workspace member (or unassign)
+  async assignMessage(userId: string, messageId: string, assignedToId: string | null) {
+    const message = await this.prisma.emailMessage.findUnique({
+      where: { id: messageId },
+      include: { account: true },
+    });
+
+    if (!message) {
+      throw new NotFoundException('Message not found');
+    }
+
+    const { account } = await this.validateAccountAccess(userId, message.accountId);
+
+    let assignee: { id: string; name: string; avatarUrl?: string | null } | null = null;
+    if (assignedToId) {
+      assignee = await this.prisma.user.findUnique({
+        where: { id: assignedToId },
+        select: { id: true, name: true, avatarUrl: true },
+      });
+    }
+
+    const updated = await this.prisma.emailMessage.update({
+      where: { id: messageId },
+      data: {
+        assignedToId: assignee ? assignee.id : null,
+        assignedToName: assignee ? assignee.name : null,
+        assignedAt: assignee ? new Date() : null,
+      },
+      include: {
+        assignedTo: { select: { id: true, name: true, avatarUrl: true } },
+      },
+    });
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, name: true },
+    });
+
+    if (this.messagesGateway?.server) {
+      const payload = {
+        messageId,
+        accountId: account.id,
+        assignedToId: assignee ? assignee.id : null,
+        assignedToName: assignee ? assignee.name : null,
+        assignedToAvatarUrl: assignee?.avatarUrl || null,
+        assignedAt: updated.assignedAt,
+        assignedById: userId,
+        assignedByName: user?.name || null,
+      };
+
+      if (account.workspaceId) {
+        this.messagesGateway.server.to(`workspace:${account.workspaceId}`).emit('email_assigned_updated', payload);
+      } else if (account.channelId) {
+        this.messagesGateway.server.to(`channel:${account.channelId}`).emit('email_assigned_updated', payload);
+      } else if (account.userId) {
+        this.messagesGateway.server.to(`user:${account.userId}`).emit('email_assigned_updated', payload);
       }
     }
 

@@ -58,6 +58,7 @@ import {
   VolumeX,
   CheckCheck,
   UserPlus,
+  UserCheck,
   UserMinus,
   Mail,
   Link as LinkIcon,
@@ -195,6 +196,10 @@ export interface EmailMessageItem {
   handledAt?: string | null;
   sentById?: string | null;
   sentByName?: string | null;
+  assignedToId?: string | null;
+  assignedToName?: string | null;
+  assignedAt?: string | null;
+  assignedTo?: { id: string; name: string; avatarUrl?: string | null } | null;
   hasAttachments: boolean;
   attachments?: Array<{ fileName: string; fileUrl: string; fileSize: number; contentType: string }>;
   attachmentsJson?: Array<{ fileName: string; fileUrl: string; fileSize: number; contentType: string }>;
@@ -888,6 +893,14 @@ function WorkspaceShellContent() {
   const [isMailLoading, setIsMailLoading] = useState(false);
   const [mailSearchQuery, setMailSearchQuery] = useState('');
   const [mailStatusFilter, setMailStatusFilter] = useState<'unhandled' | 'done' | 'all'>('unhandled');
+  const [mailAssigneeFilter, setMailAssigneeFilter] = useState<'all' | 'me' | 'unassigned' | string>('all');
+  const [showMailAssigneeFilterPopover, setShowMailAssigneeFilterPopover] = useState(false);
+  const [showDetailAssigneePopover, setShowDetailAssigneePopover] = useState(false);
+  const [assigneeSearchQuery, setAssigneeSearchQuery] = useState('');
+  const mailAssigneeFilterPopoverRef = useRef<HTMLDivElement>(null);
+  const mailDetailAssigneePopoverRef = useRef<HTMLDivElement>(null);
+  const [showEmailDetailMoreMenu, setShowEmailDetailMoreMenu] = useState(false);
+  const emailDetailMoreMenuRef = useRef<HTMLDivElement>(null);
   const [selectedTagFilter, setSelectedTagFilter] = useState<string>('all');
   const [showMailTagPopover, setShowMailTagPopover] = useState(false);
   const [tagSearchInput, setTagSearchInput] = useState('');
@@ -1389,9 +1402,16 @@ function WorkspaceShellContent() {
       }
       if (emailFilterMode === 'unread') return !msg.isRead;
       if (emailFilterMode === 'starred') return msg.isStarred;
+      if (mailAssigneeFilter === 'me') {
+        if (msg.assignedToId !== user?.id) return false;
+      } else if (mailAssigneeFilter === 'unassigned') {
+        if (msg.assignedToId) return false;
+      } else if (mailAssigneeFilter !== 'all') {
+        if (msg.assignedToId !== mailAssigneeFilter) return false;
+      }
       return true;
     });
-  }, [mailMessages, mailFolder, mailStatusFilter, emailFilterMode]);
+  }, [mailMessages, mailFolder, mailStatusFilter, emailFilterMode, mailAssigneeFilter, user?.id]);
 
   // Tag counts calculated strictly for visible messages in the current mailbox view
   const mailTagCounts = useMemo(() => {
@@ -1654,6 +1674,49 @@ function WorkspaceShellContent() {
       }
     } catch (e) {
       console.error('Failed to fetch email details:', e);
+    }
+  }
+
+  async function handleAssignEmail(messageId: string, assignedToId: string | null) {
+    const targetMember = members.find((m) => m.user?.id === assignedToId);
+    const assignedToName = targetMember ? targetMember.user.name : null;
+    setMailMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId
+          ? {
+              ...m,
+              assignedToId,
+              assignedToName,
+              assignedAt: assignedToId ? new Date().toISOString() : null,
+              assignedTo: targetMember ? { id: targetMember.user.id, name: targetMember.user.name, avatarUrl: targetMember.user.avatarUrl } : null,
+            }
+          : m,
+      ),
+    );
+    if (selectedEmail?.id === messageId) {
+      setSelectedEmail((prev) =>
+        prev
+          ? {
+              ...prev,
+              assignedToId,
+              assignedToName,
+              assignedAt: assignedToId ? new Date().toISOString() : null,
+              assignedTo: targetMember ? { id: targetMember.user.id, name: targetMember.user.name, avatarUrl: targetMember.user.avatarUrl } : null,
+            }
+          : null,
+      );
+    }
+    try {
+      await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/mail/messages/${messageId}/assign`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ assignedToId }),
+      });
+    } catch (err) {
+      console.error('Failed to update email assignee:', err);
     }
   }
 
@@ -5042,6 +5105,42 @@ function WorkspaceShellContent() {
       }
     }
 
+    function handleEmailAssignedUpdated(data: {
+      messageId: string;
+      accountId: string;
+      assignedToId: string | null;
+      assignedToName: string | null;
+      assignedAt?: string | null;
+      assignedTo?: { id: string; name: string; avatarUrl?: string | null } | null;
+    }) {
+      setMailMessages((prev) =>
+        prev.map((m) =>
+          m.id === data.messageId
+            ? {
+                ...m,
+                assignedToId: data.assignedToId,
+                assignedToName: data.assignedToName,
+                assignedAt: data.assignedAt,
+                assignedTo: data.assignedTo,
+              }
+            : m,
+        ),
+      );
+      if (selectedEmailRef.current?.id === data.messageId) {
+        setSelectedEmail((prev) =>
+          prev
+            ? {
+                ...prev,
+                assignedToId: data.assignedToId,
+                assignedToName: data.assignedToName,
+                assignedAt: data.assignedAt,
+                assignedTo: data.assignedTo,
+              }
+            : null,
+        );
+      }
+    }
+
     function handleEmailHandledUpdated(data: {
       messageId: string;
       accountId: string;
@@ -5186,6 +5285,7 @@ function WorkspaceShellContent() {
     socket.on('workspace_channel_message', handleWorkspaceChannelMessage);
     socket.on('new_direct_message', handleGlobalDirectMessage);
     socket.on('email_handled_updated', handleEmailHandledUpdated);
+    socket.on('email_assigned_updated', handleEmailAssignedUpdated);
     socket.on('email_read_updated', handleEmailReadUpdated);
     socket.on('new_group_email', handleNewGroupEmail);
 
@@ -5200,6 +5300,7 @@ function WorkspaceShellContent() {
       socket.off('workspace_channel_message', handleWorkspaceChannelMessage);
       socket.off('new_direct_message', handleGlobalDirectMessage);
       socket.off('email_handled_updated', handleEmailHandledUpdated);
+      socket.off('email_assigned_updated', handleEmailAssignedUpdated);
       socket.off('email_read_updated', handleEmailReadUpdated);
       socket.off('new_group_email', handleNewGroupEmail);
     };
@@ -7843,7 +7944,7 @@ function WorkspaceShellContent() {
                         setSelectedEmail(null);
                         setIsReplyingInline(false);
                       }}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200/80 text-xs font-bold text-slate-700 hover:text-indigo-600 transition-all shadow-2xs shrink-0 cursor-pointer group"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200/80 text-xs font-bold text-slate-700 hover:text-indigo-600 transition-all shadow-2xs shrink-0 cursor-pointer group whitespace-nowrap"
                       title="Back to all emails"
                     >
                       <ArrowLeft className="w-3.5 h-3.5 text-slate-500 group-hover:text-indigo-600 group-hover:-translate-x-0.5 transition-transform" />
@@ -7864,7 +7965,7 @@ function WorkspaceShellContent() {
                       <button
                         type="button"
                         onClick={() => handleToggleHandledEmail(selectedEmail.id, selectedEmail.isHandled)}
-                        className={`px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer ${
+                        className={`px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer shrink-0 whitespace-nowrap ${
                           selectedEmail.isHandled
                             ? 'bg-emerald-50 text-emerald-800 border border-emerald-300 hover:bg-emerald-100'
                             : 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-600/20'
@@ -7875,6 +7976,130 @@ function WorkspaceShellContent() {
                         <span>{selectedEmail.isHandled ? `Done by ${selectedEmail.handledByName || 'Team'}` : 'Mark as Done'}</span>
                       </button>
                     )}
+
+                    {/* Front-Style Assignee Dropdown Popover */}
+                    <div className="relative" ref={mailDetailAssigneePopoverRef}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowDetailAssigneePopover(!showDetailAssigneePopover);
+                          setShowMailTagPopover(false);
+                          setShowEmailDetailMoreMenu(false);
+                        }}
+                        className={`px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 border transition-all shadow-2xs cursor-pointer ${
+                          selectedEmail.assignedToId
+                            ? 'bg-violet-50 text-violet-700 border-violet-200 hover:bg-violet-100'
+                            : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
+                        }`}
+                        title="Assign this conversation to a team member"
+                      >
+                        <UserCheck className="w-3.5 h-3.5 text-violet-600" />
+                        <span>{selectedEmail.assignedToName ? `Assigned: ${selectedEmail.assignedToName.split(' ')[0]}` : 'Assign'}</span>
+                        <ChevronDown className="w-3 h-3 opacity-60 ml-0.5" />
+                      </button>
+
+                      {showDetailAssigneePopover && (
+                        <div className="absolute right-0 top-full mt-2 w-72 bg-white rounded-2xl border border-slate-200 shadow-2xl p-3 z-50 animate-in zoom-in-95 duration-150">
+                          <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                            <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                              <UserCheck className="w-3.5 h-3.5 text-violet-600" />
+                              <span>Assign Conversation</span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setShowDetailAssigneePopover(false)}
+                              className="text-slate-400 hover:text-slate-600 p-0.5 rounded-md cursor-pointer"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+
+                          <div className="py-2 space-y-1">
+                            {user && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  handleAssignEmail(selectedEmail.id, user.id);
+                                  setShowDetailAssigneePopover(false);
+                                }}
+                                className={`w-full px-2.5 py-1.5 rounded-xl text-xs font-bold text-left flex items-center justify-between cursor-pointer ${
+                                  selectedEmail.assignedToId === user.id ? 'bg-violet-50 text-violet-700' : 'text-slate-700 hover:bg-slate-50'
+                                }`}
+                              >
+                                <span className="flex items-center gap-2">
+                                  <span className="text-sm">⚡</span>
+                                  <span>Assign to Me</span>
+                                </span>
+                                {selectedEmail.assignedToId === user.id && <Check className="w-3.5 h-3.5 text-violet-600" />}
+                              </button>
+                            )}
+
+                            {selectedEmail.assignedToId && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  handleAssignEmail(selectedEmail.id, null);
+                                  setShowDetailAssigneePopover(false);
+                                }}
+                                className="w-full px-2.5 py-1.5 rounded-xl text-xs font-bold text-left flex items-center gap-2 text-rose-600 hover:bg-rose-50 cursor-pointer"
+                              >
+                                <span className="text-sm">❌</span>
+                                <span>Unassign Conversation</span>
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="pt-2 border-t border-slate-100">
+                            <div className="relative mb-2">
+                              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                              <input
+                                type="text"
+                                value={assigneeSearchQuery}
+                                onChange={(e) => setAssigneeSearchQuery(e.target.value)}
+                                placeholder="Search team member..."
+                                className="w-full pl-8 pr-3 py-1.5 rounded-xl bg-slate-50 border border-slate-200 text-xs focus:bg-white focus:outline-none focus:border-violet-400"
+                              />
+                            </div>
+
+                            <div className="max-h-48 overflow-y-auto space-y-0.5">
+                              {members
+                                .filter((m) =>
+                                  !assigneeSearchQuery ||
+                                  m.user.name.toLowerCase().includes(assigneeSearchQuery.toLowerCase()) ||
+                                  m.user.email.toLowerCase().includes(assigneeSearchQuery.toLowerCase())
+                                )
+                                .map((m) => {
+                                  const isAssigned = selectedEmail.assignedToId === m.user.id;
+                                  return (
+                                    <button
+                                      key={m.id}
+                                      type="button"
+                                      onClick={() => {
+                                        handleAssignEmail(selectedEmail.id, m.user.id);
+                                        setShowDetailAssigneePopover(false);
+                                      }}
+                                      className={`w-full px-2.5 py-2 rounded-xl text-xs flex items-center justify-between cursor-pointer transition-colors ${
+                                        isAssigned ? 'bg-violet-50 text-violet-700 font-bold' : 'text-slate-700 hover:bg-slate-50'
+                                      }`}
+                                    >
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-violet-600 to-indigo-600 text-white flex items-center justify-center text-[10px] font-bold shrink-0">
+                                          {m.user.name.charAt(0).toUpperCase()}
+                                        </div>
+                                        <div className="text-left min-w-0">
+                                          <div className="font-bold truncate text-slate-900">{m.user.name}</div>
+                                          <div className="text-[10px] text-slate-400 truncate">{m.user.email}</div>
+                                        </div>
+                                      </div>
+                                      {isAssigned && <Check className="w-4 h-4 text-violet-600 shrink-0" />}
+                                    </button>
+                                  );
+                                })}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
 
                     {/* Front-Style Tag Dropdown Popover */}
                     <div className="relative" ref={mailTagPopoverRef}>
@@ -8022,58 +8247,108 @@ function WorkspaceShellContent() {
                       )}
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={(e) => handleToggleStarEmail(selectedEmail.id, e)}
-                      className="p-2 rounded-xl text-slate-400 hover:text-amber-500 hover:bg-slate-100 transition-colors cursor-pointer"
-                      title={selectedEmail.isStarred ? 'Unstar' : 'Star'}
-                    >
-                      <Star className={`w-4 h-4 ${selectedEmail.isStarred ? 'text-amber-400 fill-amber-400' : ''}`} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleToggleReadEmail(selectedEmail.id)}
-                      className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
-                      title="Mark unread"
-                    >
-                      <Mail className="w-4 h-4" />
-                    </button>
-                    {selectedEmail.folder === 'SPAM' || mailFolder === 'SPAM' ? (
+                    {/* MORE ACTIONS DROPDOWN (Three Dots Menu) */}
+                    <div className="relative" ref={emailDetailMoreMenuRef}>
                       <button
                         type="button"
-                        onClick={() => handleMoveToFolder(selectedEmail.id, 'INBOX')}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 text-xs font-bold transition-all shadow-2xs cursor-pointer"
-                        title="Mark as Not Spam (Move to Inbox)"
+                        onClick={() => {
+                          setShowEmailDetailMoreMenu(!showEmailDetailMoreMenu);
+                          setShowDetailAssigneePopover(false);
+                          setShowMailTagPopover(false);
+                        }}
+                        className={`p-1.5 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors cursor-pointer border border-slate-200/80 shadow-2xs ${
+                          showEmailDetailMoreMenu ? 'bg-slate-100 text-slate-900 ring-2 ring-indigo-500/20' : 'bg-white'
+                        }`}
+                        title="More email actions"
                       >
-                        <Inbox className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>Not Spam</span>
+                        <MoreVertical className="w-4 h-4" />
                       </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => handleMoveToFolder(selectedEmail.id, 'SPAM')}
-                        className="p-2 rounded-xl text-slate-400 hover:text-amber-700 hover:bg-amber-50 transition-colors cursor-pointer"
-                        title="Move to Spam"
-                      >
-                        <AlertCircle className="w-4 h-4 text-amber-500" />
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteEmail(selectedEmail.id)}
-                      className="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                      title="Move to Trash"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => window.print()}
-                      className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors hidden sm:inline-flex cursor-pointer"
-                      title="Print Email"
-                    >
-                      <Printer className="w-4 h-4" />
-                    </button>
+
+                      {showEmailDetailMoreMenu && (
+                        <div className="absolute right-0 top-full mt-2 w-52 bg-white rounded-2xl border border-slate-200 shadow-2xl p-1.5 z-50 animate-in zoom-in-95 duration-150">
+                          {/* Star / Unstar */}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              handleToggleStarEmail(selectedEmail.id, e);
+                              setShowEmailDetailMoreMenu(false);
+                            }}
+                            className="w-full px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-amber-600 flex items-center gap-2.5 transition-colors cursor-pointer"
+                          >
+                            <Star className={`w-4 h-4 ${selectedEmail.isStarred ? 'text-amber-400 fill-amber-400' : 'text-slate-400'}`} />
+                            <span>{selectedEmail.isStarred ? 'Unstar email' : 'Star email'}</span>
+                          </button>
+
+                          {/* Mark as Unread */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handleToggleReadEmail(selectedEmail.id);
+                              setShowEmailDetailMoreMenu(false);
+                            }}
+                            className="w-full px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2.5 transition-colors cursor-pointer"
+                          >
+                            <Mail className="w-4 h-4 text-slate-400" />
+                            <span>Mark as unread</span>
+                          </button>
+
+                          {/* Spam / Not Spam */}
+                          {selectedEmail.folder === 'SPAM' || mailFolder === 'SPAM' ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                handleMoveToFolder(selectedEmail.id, 'INBOX');
+                                setShowEmailDetailMoreMenu(false);
+                              }}
+                              className="w-full px-3 py-2 rounded-xl text-xs font-semibold text-emerald-700 hover:bg-emerald-50 flex items-center gap-2.5 transition-colors cursor-pointer"
+                            >
+                              <Inbox className="w-4 h-4 text-emerald-600" />
+                              <span>Move to Inbox</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                handleMoveToFolder(selectedEmail.id, 'SPAM');
+                                setShowEmailDetailMoreMenu(false);
+                              }}
+                              className="w-full px-3 py-2 rounded-xl text-xs font-semibold text-amber-700 hover:bg-amber-50 flex items-center gap-2.5 transition-colors cursor-pointer"
+                            >
+                              <AlertCircle className="w-4 h-4 text-amber-500" />
+                              <span>Mark as Spam</span>
+                            </button>
+                          )}
+
+                          {/* Print Email */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              window.print();
+                              setShowEmailDetailMoreMenu(false);
+                            }}
+                            className="w-full px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-2.5 transition-colors cursor-pointer"
+                          >
+                            <Printer className="w-4 h-4 text-slate-400" />
+                            <span>Print Email</span>
+                          </button>
+
+                          <div className="my-1 border-t border-slate-100" />
+
+                          {/* Delete / Move to Trash */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handleDeleteEmail(selectedEmail.id);
+                              setShowEmailDetailMoreMenu(false);
+                            }}
+                            className="w-full px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 flex items-center gap-2.5 transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-4 h-4 text-rose-500" />
+                            <span>Move to Trash</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
                     <span className="h-4 w-[1px] bg-slate-200 mx-1" />
 
                     {/* 1-CLICK SHARE IN CHAT CHANNEL */}
@@ -8864,6 +9139,129 @@ function WorkspaceShellContent() {
                       })}
                     </div>
 
+                    {/* FRONT-STYLE ASSIGNEE FILTER DROPDOWN POPOVER */}
+                    <div className="relative" ref={mailAssigneeFilterPopoverRef}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowMailAssigneeFilterPopover(!showMailAssigneeFilterPopover);
+                          setShowMailHeaderTagPopover(false);
+                          setShowMailDatePopover(false);
+                        }}
+                        className={`h-8 flex items-center gap-1.5 px-2.5 rounded-xl text-xs font-medium border transition-all cursor-pointer shadow-2xs ${
+                          mailAssigneeFilter !== 'all'
+                            ? 'bg-violet-50 border-violet-200 text-violet-700 font-bold shadow-violet-100'
+                            : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700 hover:text-slate-900'
+                        }`}
+                        title="Filter emails by assignee"
+                      >
+                        <UserCheck className={`w-3.5 h-3.5 shrink-0 ${mailAssigneeFilter !== 'all' ? 'text-violet-600' : 'text-slate-400'}`} />
+                        <span>
+                          {mailAssigneeFilter === 'all'
+                            ? 'Assignee'
+                            : mailAssigneeFilter === 'me'
+                            ? 'Assigned to Me'
+                            : mailAssigneeFilter === 'unassigned'
+                            ? 'Unassigned'
+                            : (members.find((m) => m.user?.id === mailAssigneeFilter)?.user.name || 'Assignee')}
+                        </span>
+                        <ChevronDown className="w-3 h-3 opacity-60 ml-0.5" />
+                      </button>
+
+                      {showMailAssigneeFilterPopover && (
+                        <div className="absolute left-0 top-full mt-2 w-64 bg-white rounded-2xl border border-slate-200 shadow-2xl p-2 z-50 animate-in zoom-in-95 duration-150">
+                          <div className="px-2 py-1.5 text-xs font-bold text-slate-800 border-b border-slate-100 flex items-center justify-between">
+                            <span>Filter by Assignee</span>
+                            {mailAssigneeFilter !== 'all' && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setMailAssigneeFilter('all');
+                                  setShowMailAssigneeFilterPopover(false);
+                                }}
+                                className="text-[10px] text-violet-600 hover:underline cursor-pointer"
+                              >
+                                Reset
+                              </button>
+                            )}
+                          </div>
+                          <div className="py-1">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setMailAssigneeFilter('all');
+                                setShowMailAssigneeFilterPopover(false);
+                              }}
+                              className={`w-full px-2.5 py-1.5 rounded-lg text-xs font-semibold text-left flex items-center justify-between cursor-pointer ${
+                                mailAssigneeFilter === 'all' ? 'bg-violet-50 text-violet-700 font-bold' : 'text-slate-700 hover:bg-slate-50'
+                              }`}
+                            >
+                              <span>All Conversations</span>
+                              {mailAssigneeFilter === 'all' && <Check className="w-3.5 h-3.5 text-violet-600" />}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setMailAssigneeFilter('me');
+                                setShowMailAssigneeFilterPopover(false);
+                              }}
+                              className={`w-full px-2.5 py-1.5 rounded-lg text-xs font-semibold text-left flex items-center justify-between cursor-pointer ${
+                                mailAssigneeFilter === 'me' ? 'bg-violet-50 text-violet-700 font-bold' : 'text-slate-700 hover:bg-slate-50'
+                              }`}
+                            >
+                              <span className="flex items-center gap-1.5">
+                                <span>👤</span>
+                                <span>Assigned to Me</span>
+                              </span>
+                              {mailAssigneeFilter === 'me' && <Check className="w-3.5 h-3.5 text-violet-600" />}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setMailAssigneeFilter('unassigned');
+                                setShowMailAssigneeFilterPopover(false);
+                              }}
+                              className={`w-full px-2.5 py-1.5 rounded-lg text-xs font-semibold text-left flex items-center justify-between cursor-pointer ${
+                                mailAssigneeFilter === 'unassigned' ? 'bg-violet-50 text-violet-700 font-bold' : 'text-slate-700 hover:bg-slate-50'
+                              }`}
+                            >
+                              <span className="flex items-center gap-1.5">
+                                <span>⭕</span>
+                                <span>Unassigned</span>
+                              </span>
+                              {mailAssigneeFilter === 'unassigned' && <Check className="w-3.5 h-3.5 text-violet-600" />}
+                            </button>
+                          </div>
+                          {members.length > 0 && (
+                            <div className="border-t border-slate-100 pt-1 mt-1 max-h-48 overflow-y-auto">
+                              <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Team Members</div>
+                              {members.map((m) => (
+                                <button
+                                  key={m.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setMailAssigneeFilter(m.user.id);
+                                    setShowMailAssigneeFilterPopover(false);
+                                  }}
+                                  className={`w-full px-2.5 py-1.5 rounded-lg text-xs font-semibold text-left flex items-center justify-between cursor-pointer ${
+                                    mailAssigneeFilter === m.user.id ? 'bg-violet-50 text-violet-700 font-bold' : 'text-slate-700 hover:bg-slate-50'
+                                  }`}
+                                >
+                                  <span className="flex items-center gap-2 truncate">
+                                    <span className="w-5 h-5 rounded-full bg-slate-200 text-slate-700 flex items-center justify-center text-[10px] font-bold shrink-0">
+                                      {m.user.name.charAt(0).toUpperCase()}
+                                    </span>
+                                    <span className="truncate">{m.user.name}</span>
+                                  </span>
+                                  {mailAssigneeFilter === m.user.id && <Check className="w-3.5 h-3.5 text-violet-600 shrink-0" />}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
                     {/* FRONT-STYLE TAGS & LABELS FILTER DROPDOWN POPOVER */}
                     <div className="relative" ref={mailHeaderTagPopoverRef}>
                       <button
@@ -9457,6 +9855,14 @@ function WorkspaceShellContent() {
                                 <span>Needs Action</span>
                               </span>
                             ) : null}
+
+                            {/* Assignee Badge */}
+                            {msg.assignedToName && (
+                              <span className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-violet-50 border border-violet-200 text-[10px] font-bold text-violet-700 shadow-2xs" title={`Assigned to ${msg.assignedToName}`}>
+                                <UserCheck className="w-2.5 h-2.5 text-violet-600" />
+                                <span>{msg.assignedToName.split(' ')[0]}</span>
+                              </span>
+                            )}
 
                             {/* Subject */}
                             <span className={`text-xs truncate shrink-0 max-w-[240px] sm:max-w-[320px] md:max-w-[420px] ${!msg.isRead ? 'font-bold text-slate-900' : 'font-medium text-slate-700'}`}>

@@ -136,6 +136,7 @@ export class MailController {
     @Query('folder') folder?: string,
     @Query('status') status?: 'all' | 'unhandled' | 'done',
     @Query('tag') tag?: string,
+    @Query('assignee') assignee?: string,
     @Query('search') search?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -146,6 +147,7 @@ export class MailController {
       folder,
       status,
       tag,
+      assignee,
       search,
       page: page ? parseInt(page, 10) : 1,
       limit: limit ? parseInt(limit, 10) : 20,
@@ -194,6 +196,15 @@ export class MailController {
     @Body() body: { isHandled?: boolean },
   ) {
     return this.mailService.toggleHandled(user.id, id, body?.isHandled);
+  }
+
+  @Patch('messages/:id/assign')
+  async assignMessage(
+    @CurrentUser() user: { id: string },
+    @Param('id') id: string,
+    @Body() body: { assignedToId?: string | null },
+  ) {
+    return this.mailService.assignMessage(user.id, id, body?.assignedToId ?? null);
   }
 
   @Patch('messages/:id/tags')

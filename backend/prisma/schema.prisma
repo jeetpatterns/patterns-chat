@@ -60,6 +60,7 @@ model User {
   emailAccounts          EmailAccount[]
   handledEmailMessages   EmailMessage[]       @relation("HandledEmailMessages")
   sentEmailMessages      EmailMessage[]       @relation("SentEmailMessages")
+  assignedEmailMessages  EmailMessage[]       @relation("AssignedEmailMessages")
 
   @@map("users")
 }
@@ -411,6 +412,10 @@ model EmailMessage {
   sentById          String?
   sentBy            User?        @relation("SentEmailMessages", fields: [sentById], references: [id], onDelete: SetNull)
   sentByName        String?
+  assignedToId      String?
+  assignedTo        User?        @relation("AssignedEmailMessages", fields: [assignedToId], references: [id], onDelete: SetNull)
+  assignedToName    String?
+  assignedAt        DateTime?
   hasAttachments    Boolean      @default(false)
   attachmentsJson   Json?
   tags              String[]     @default([])
@@ -422,6 +427,7 @@ model EmailMessage {
   @@index([accountId, folder, receivedAt])
   @@index([accountId, isRead])
   @@index([accountId, isHandled])
+  @@index([accountId, assignedToId])
   @@map("email_messages")
 }
 
