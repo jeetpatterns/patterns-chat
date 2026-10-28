@@ -1181,6 +1181,137 @@ export class MailService implements OnModuleInit {
     return false;
   }
 
+  // Fetch unified contact suggestions: workspace members + email message participants + allowed domains
+  async getContacts(userId: string, workspaceId?: string, query?: string) {
+    const qClean = (query || '').trim().toLowerCase();
+    const contactMap = new Map<
+      string,
+      { name: string; email: string; avatarUrl?: string; source: 'workspace' | 'contact' | 'domain' }
+    >();
+
+    // 1. Workspace members
+    try {
+      let members: any[] = [];
+      if (workspaceId) {
+        members = await this.prisma.workspaceMember.findMany({
+          where: { workspaceId },
+          include: {
+            user: {
+              select: { id: true, name: true, email: true, avatarUrl: true },
+            },
+          },
+        });
+      } else {
+        const users = await this.prisma.user.findMany({
+          select: { id: true, name: true, email: true, avatarUrl: true },
+          take: 60,
+        });
+        members = users.map((u) => ({ user: u }));
+      }
+
+      for (const m of members) {
+        const u = m.user;
+        if (u?.email) {
+          const email = u.email.trim().toLowerCase();
+          contactMap.set(email, {
+            name: u.name || email.split('@')[0],
+            email: u.email.trim(),
+            avatarUrl: u.avatarUrl,
+            source: 'workspace',
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('Error fetching workspace contacts:', err);
+    }
+
+    // 2. Email participants from recent messages across user's accessible mailboxes
+    try {
+      const accessibleAccounts = await this.getAccounts(userId, workspaceId);
+      const accIds = accessibleAccounts.map((a) => a.id);
+
+      if (accIds.length > 0) {
+        const recentMessages = await this.prisma.emailMessage.findMany({
+          where: { accountId: { in: accIds } },
+          orderBy: { receivedAt: 'desc' },
+          take: 400,
+          select: {
+            fromName: true,
+            fromAddress: true,
+            toAddresses: true,
+            ccAddresses: true,
+          },
+        });
+
+        for (const msg of recentMessages) {
+          if (msg.fromAddress && msg.fromAddress.includes('@')) {
+            const rawEmail = msg.fromAddress.trim();
+            const email = rawEmail.toLowerCase();
+            if (!contactMap.has(email)) {
+              contactMap.set(email, {
+                name: msg.fromName || rawEmail.split('@')[0],
+                email: rawEmail,
+                source: 'contact',
+              });
+            }
+          }
+
+          if (Array.isArray(msg.toAddresses)) {
+            for (const rawTo of msg.toAddresses) {
+              if (rawTo && rawTo.includes('@')) {
+                const email = rawTo.trim().toLowerCase();
+                if (!contactMap.has(email)) {
+                  contactMap.set(email, {
+                    name: rawTo.split('@')[0],
+                    email: rawTo.trim(),
+                    source: 'contact',
+                  });
+                }
+              }
+            }
+          }
+
+          if (Array.isArray(msg.ccAddresses)) {
+            for (const rawCc of msg.ccAddresses) {
+              if (rawCc && rawCc.includes('@')) {
+                const email = rawCc.trim().toLowerCase();
+                if (!contactMap.has(email)) {
+                  contactMap.set(email, {
+                    name: rawCc.split('@')[0],
+                    email: rawCc.trim(),
+                    source: 'contact',
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Error fetching email participant contacts:', err);
+    }
+
+    let allContacts = Array.from(contactMap.values());
+
+    // Filter by query if provided
+    if (qClean) {
+      allContacts = allContacts.filter(
+        (c) =>
+          c.email.toLowerCase().includes(qClean) ||
+          c.name.toLowerCase().includes(qClean),
+      );
+    }
+
+    // Sort: workspace members first, then alphabetically
+    allContacts.sort((a, b) => {
+      if (a.source === 'workspace' && b.source !== 'workspace') return -1;
+      if (b.source === 'workspace' && a.source !== 'workspace') return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    return { contacts: allContacts.slice(0, 60) };
+  }
+
   // Fetch messages with filters, folders, search, pagination, and Handled/Done status
   async getMessages(
     userId: string,
@@ -1718,6 +1849,7 @@ export class MailService implements OnModuleInit {
         fileSize?: number;
         contentType?: string;
         base64Data?: string;
+        attachmentId?: string;
       }>;
     },
   ) {
@@ -1730,6 +1862,77 @@ export class MailService implements OnModuleInit {
     const cleanTo = data.to.filter((t) => t && t.includes('@'));
     if (cleanTo.length === 0) {
       throw new BadRequestException('At least one valid recipient is required');
+    }
+
+    // Resolve all attachments ensuring base64Data and permanent storage exist (e.g. for forwarded messages)
+    if (data.attachments && data.attachments.length > 0) {
+      const resolvedAttachments: Array<{
+        fileName: string;
+        fileUrl?: string;
+        fileSize?: number;
+        contentType?: string;
+        base64Data?: string;
+        attachmentId?: string;
+      }> = [];
+
+      for (const att of data.attachments) {
+        let b64 = att.base64Data ? att.base64Data.replace(/^data:[^;]+;base64,/, '').replace(/\s/g, '') : '';
+        let fileUrl = att.fileUrl;
+        let contentType = att.contentType || 'application/octet-stream';
+        let fileSize = att.fileSize || 0;
+
+        // If missing base64Data but fileUrl is present (e.g. forwarded email attachment)
+        if (!b64 && fileUrl) {
+          try {
+            const match = fileUrl.match(/\/mail\/messages\/([^/]+)\/attachments\/([^/?]+)/);
+            if (match) {
+              const [, srcMsgId, srcAttId] = match;
+              const attFile = await this.getAttachment(userId, srcMsgId, srcAttId);
+              if (attFile?.buffer) {
+                b64 = attFile.buffer.toString('base64');
+                fileSize = attFile.size || attFile.buffer.length;
+                contentType = attFile.contentType || contentType;
+              }
+            } else if (fileUrl.startsWith('/uploads/') || fileUrl.startsWith('uploads/')) {
+              const cleanPath = fileUrl.startsWith('/') ? fileUrl.slice(1) : fileUrl;
+              const fullPath = join(process.cwd(), cleanPath);
+              if (existsSync(fullPath)) {
+                const fileBuf = await fsPromises.readFile(fullPath);
+                b64 = fileBuf.toString('base64');
+                fileSize = fileBuf.length;
+              }
+            }
+          } catch (attErr: any) {
+            console.warn('Failed to resolve attachment for email send/forward:', att.fileName, attErr?.message || attErr);
+          }
+        }
+
+        // Persist forwarded attachments to uploads so internal recipients in Patterns can view/download them directly
+        if (b64 && (!fileUrl || fileUrl.includes('/attachments/'))) {
+          try {
+            const uploadsDir = join(process.cwd(), 'uploads');
+            if (!existsSync(uploadsDir)) mkdirSync(uploadsDir, { recursive: true });
+            const safeName = att.fileName ? att.fileName.replace(/[^a-zA-Z0-9._-]/g, '_') : 'attachment';
+            const uniqueName = `att_${Date.now()}_${Math.random().toString(36).substring(2, 7)}_${safeName}`;
+            const filePath = join(uploadsDir, uniqueName);
+            await fsPromises.writeFile(filePath, Buffer.from(b64, 'base64'));
+            fileUrl = `/uploads/${uniqueName}`;
+            if (!fileSize) fileSize = Buffer.byteLength(b64, 'base64');
+          } catch (saveErr) {
+            console.warn('Failed to save attachment to uploads:', saveErr);
+          }
+        }
+
+        resolvedAttachments.push({
+          fileName: att.fileName || 'attachment',
+          fileUrl: fileUrl || att.fileUrl,
+          fileSize,
+          contentType,
+          base64Data: b64,
+          attachmentId: att.attachmentId,
+        });
+      }
+      data.attachments = resolvedAttachments;
     }
 
     let externalMessageId = `sent_${Math.random().toString(36).substring(2, 9)}`;

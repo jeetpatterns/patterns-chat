@@ -119,6 +119,15 @@ export class MailController {
     return this.mailService.updateAllowedDomains(user.id, id, body.allowedDomains);
   }
 
+  @Get('contacts')
+  async getContacts(
+    @CurrentUser() user: { id: string },
+    @Query('workspaceId') workspaceId?: string,
+    @Query('q') query?: string,
+  ) {
+    return this.mailService.getContacts(user.id, workspaceId, query);
+  }
+
   @Get('messages')
   async getMessages(
     @CurrentUser() user: { id: string },
@@ -271,6 +280,7 @@ export class MailController {
         fileSize?: number;
         contentType?: string;
         base64Data?: string;
+        attachmentId?: string;
       }>;
     },
   ) {

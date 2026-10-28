@@ -1108,6 +1108,21 @@ function WorkspaceShellContent() {
   const selectedEmailRef = useRef<EmailMessageItem | null>(null);
   const locallyUpdatedReads = useRef<Map<string, { isRead: boolean; timestamp: number }>>(new Map());
 
+  interface MailContactItem {
+    name: string;
+    email: string;
+    avatarUrl?: string;
+    source: string;
+  }
+
+  const [mailContacts, setMailContacts] = useState<MailContactItem[]>([]);
+  const [activeSuggestField, setActiveSuggestField] = useState<'to' | 'cc' | 'reply' | null>(null);
+  const [suggestQuery, setSuggestQuery] = useState('');
+  const [suggestIndex, setSuggestIndex] = useState(0);
+  const [replyToEmail, setReplyToEmail] = useState('');
+  const [isEditingReplyRecipient, setIsEditingReplyRecipient] = useState(false);
+  const contactSuggestRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     selectedEmailRef.current = selectedEmail;
   }, [selectedEmail]);
@@ -1126,8 +1141,11 @@ function WorkspaceShellContent() {
       if (rowTagPopoverMsgId && !(e.target as HTMLElement).closest('[data-row-tag-popover]')) {
         setRowTagPopoverMsgId(null);
       }
+      if (contactSuggestRef.current && !contactSuggestRef.current.contains(e.target as Node)) {
+        setActiveSuggestField(null);
+      }
     }
-    if (showMailDatePopover || showMailTagPopover || showMailHeaderTagPopover || rowTagPopoverMsgId) {
+    if (showMailDatePopover || showMailTagPopover || showMailHeaderTagPopover || rowTagPopoverMsgId || activeSuggestField) {
       document.addEventListener('mousedown', handleClickOutside);
     }
     return () => {
@@ -1184,6 +1202,155 @@ function WorkspaceShellContent() {
   const totalUnreadEmails = useMemo(() => {
     return mailAccounts.reduce((sum, acc) => sum + (acc.unreadCount || 0), 0);
   }, [mailAccounts]);
+
+  // Intelligent reply recipient detection:
+  // If email was sent by user/group (SENT folder or fromAddress === account.emailAddress), reply to recipient(s)!
+  // If incoming email, reply to sender!
+  const replyRecipient = useMemo(() => {
+    if (!selectedEmail) return { name: '', email: '' };
+    const accEmail = (selectedMailAccount?.emailAddress || '').trim().toLowerCase();
+    const fromEmail = (selectedEmail.fromAddress || '').trim().toLowerCase();
+
+    if (selectedEmail.folder === 'SENT' || mailFolder === 'SENT' || fromEmail === accEmail) {
+      const to = selectedEmail.toAddresses?.[0] || '';
+      return {
+        name: to.split('@')[0] || to,
+        email: to,
+      };
+    }
+
+    return {
+      name: selectedEmail.fromName || selectedEmail.fromAddress,
+      email: selectedEmail.fromAddress,
+    };
+  }, [selectedEmail, selectedMailAccount, mailFolder]);
+
+  useEffect(() => {
+    if (replyRecipient.email) {
+      setReplyToEmail(replyRecipient.email);
+    }
+    setIsEditingReplyRecipient(false);
+  }, [replyRecipient.email, selectedEmail?.id]);
+
+  async function loadMailContacts() {
+    if (!token) return;
+    try {
+      const q = workspaceId ? `?workspaceId=${workspaceId}` : '';
+      const res = await fetch(`${API_URL}/mail/contacts${q}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setMailContacts(data.contacts || []);
+      }
+    } catch (e) {
+      console.warn('Failed to load email contacts:', e);
+    }
+  }
+
+  useEffect(() => {
+    loadMailContacts();
+  }, [workspaceId, token]);
+
+  function getCurrentToken(val: string): string {
+    const parts = val.split(/[,;]/);
+    return (parts[parts.length - 1] || '').trim();
+  }
+
+  const filteredContactSuggestions = useMemo(() => {
+    const q = suggestQuery.toLowerCase().trim();
+    if (!q) return [];
+    return mailContacts
+      .filter(
+        (c) =>
+          c.email.toLowerCase().includes(q) ||
+          c.name.toLowerCase().includes(q),
+      )
+      .slice(0, 7);
+  }, [mailContacts, suggestQuery]);
+
+  function handleSelectRecipientSuggestion(email: string, field: 'to' | 'cc' | 'reply') {
+    if (field === 'reply') {
+      setReplyToEmail(email);
+      setIsEditingReplyRecipient(false);
+      setActiveSuggestField(null);
+      return;
+    }
+    const currentVal = field === 'to' ? composeMailData.to : composeMailData.cc;
+    const parts = currentVal.split(/[,;]/).map((p) => p.trim()).filter(Boolean);
+    parts.pop();
+    parts.push(email);
+    const newVal = parts.join(', ') + ', ';
+    setComposeMailData((prev) => ({ ...prev, [field]: newVal }));
+    setActiveSuggestField(null);
+  }
+
+  function handleRecipientKeyDown(e: React.KeyboardEvent, field: 'to' | 'cc' | 'reply') {
+    if (!activeSuggestField || filteredContactSuggestions.length === 0) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSuggestIndex((prev) => (prev + 1) % filteredContactSuggestions.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSuggestIndex((prev) => (prev - 1 + filteredContactSuggestions.length) % filteredContactSuggestions.length);
+    } else if (e.key === 'Enter' || e.key === 'Tab') {
+      if (filteredContactSuggestions[suggestIndex]) {
+        e.preventDefault();
+        handleSelectRecipientSuggestion(filteredContactSuggestions[suggestIndex].email, field);
+      }
+    } else if (e.key === 'Escape') {
+      setActiveSuggestField(null);
+    }
+  }
+
+  function renderContactSuggestions(field: 'to' | 'cc' | 'reply') {
+    if (activeSuggestField !== field || filteredContactSuggestions.length === 0) return null;
+
+    return (
+      <div
+        ref={contactSuggestRef}
+        className="absolute left-0 right-0 top-full mt-1.5 bg-white rounded-2xl shadow-xl border border-indigo-100 z-50 overflow-hidden divide-y divide-slate-100 animate-in fade-in zoom-in-95"
+      >
+        <div className="px-3 py-1.5 bg-slate-50/90 flex items-center justify-between text-[9px] font-bold text-slate-400 uppercase tracking-wider">
+          <span>Suggested Contacts</span>
+          <span>Tab or ↵ to select</span>
+        </div>
+        <div className="max-h-52 overflow-y-auto divide-y divide-slate-50">
+          {filteredContactSuggestions.map((c, idx) => (
+            <button
+              key={`${c.email}-${idx}`}
+              type="button"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                handleSelectRecipientSuggestion(c.email, field);
+              }}
+              className={`w-full px-3 py-2 flex items-center justify-between text-left transition-colors cursor-pointer ${
+                idx === suggestIndex ? 'bg-indigo-50/90 text-indigo-900' : 'hover:bg-slate-50 text-slate-700'
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-6 h-6 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-600 text-white font-bold text-[10px] flex items-center justify-center shrink-0 shadow-2xs">
+                  {(c.name || c.email).slice(0, 1).toUpperCase()}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold truncate text-slate-900 leading-tight">{c.name}</p>
+                  <p className="text-[10px] text-slate-400 font-mono truncate leading-tight">{c.email}</p>
+                </div>
+              </div>
+              <span className={`text-[8.5px] font-black px-1.5 py-0.5 rounded-full shrink-0 ml-2 uppercase ${
+                c.source === 'workspace'
+                  ? 'bg-indigo-100 text-indigo-700'
+                  : 'bg-slate-100 text-slate-500'
+              }`}>
+                {c.source === 'workspace' ? 'Team' : 'Contact'}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   // Dynamic Chat Browser Title updates
   useEffect(() => {
@@ -2353,6 +2520,19 @@ function WorkspaceShellContent() {
     try {
       setIsSendingMail(true);
       const replyMsgId = selectedEmail.id;
+
+      // Smart recipient determination: ensure sent emails reply to recipient, not self
+      const targetTo = (replyToEmail || replyRecipient.email).trim();
+      const cleanToList = targetTo.split(/[,;\s]+/).filter((t) => t.includes('@'));
+      if (cleanToList.length === 0 && replyRecipient.email) {
+        cleanToList.push(replyRecipient.email);
+      }
+      if (cleanToList.length === 0) {
+        alert('Please specify a valid recipient email to reply to.');
+        setIsSendingMail(false);
+        return;
+      }
+
       const res = await fetch(`${API_URL}/mail/messages/send`, {
         method: 'POST',
         headers: {
@@ -2362,7 +2542,7 @@ function WorkspaceShellContent() {
         body: JSON.stringify({
           accountId: selectedMailAccountId,
           replyToMessageId: replyMsgId,
-          to: [selectedEmail.fromAddress],
+          to: cleanToList,
           subject: selectedEmail.subject.startsWith('Re:') ? selectedEmail.subject : `Re: ${selectedEmail.subject}`,
           bodyHtml: `<p>${(inlineReplyText || 'Please see attached.').replace(/\n/g, '<br/>')}</p><br/><blockquote>On ${new Date(selectedEmail.receivedAt).toLocaleString()}, ${selectedEmail.fromName || selectedEmail.fromAddress} wrote:<br/>${selectedEmail.bodyHtml || selectedEmail.snippet}</blockquote>`,
           bodyText: inlineReplyText || 'Please see attached.',
@@ -7916,6 +8096,8 @@ function WorkspaceShellContent() {
                       type="button"
                       onClick={() => {
                         setIsReplyingInline(true);
+                        setIsEditingReplyRecipient(false);
+                        if (replyRecipient.email) setReplyToEmail(replyRecipient.email);
                       }}
                       className="px-3 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-xs font-semibold text-slate-700 flex items-center gap-1.5 transition-colors cursor-pointer"
                     >
@@ -7926,10 +8108,23 @@ function WorkspaceShellContent() {
                     <button
                       type="button"
                       onClick={() => {
+                        const atts = (selectedEmail.attachments && selectedEmail.attachments.length > 0
+                          ? selectedEmail.attachments
+                          : selectedEmail.attachmentsJson) || [];
+                        setComposeAttachments(
+                          atts.map((a: any) => ({
+                            fileName: a.fileName || 'attachment',
+                            fileUrl: a.fileUrl,
+                            fileSize: a.fileSize || 0,
+                            contentType: a.contentType || 'application/octet-stream',
+                            base64Data: a.base64Data,
+                            attachmentId: a.attachmentId || a.id,
+                          }))
+                        );
                         setComposeMailData({
                           to: '',
                           cc: '',
-                          subject: `Fwd: ${selectedEmail.subject}`,
+                          subject: selectedEmail.subject.startsWith('Fwd:') ? selectedEmail.subject : `Fwd: ${selectedEmail.subject}`,
                           body: `\n\n---------- Forwarded message ---------\nFrom: ${selectedEmail.fromName || selectedEmail.fromAddress} <${selectedEmail.fromAddress}>\nDate: ${new Date(selectedEmail.receivedAt).toLocaleString()}\nSubject: ${selectedEmail.subject}\nTo: ${selectedEmail.toAddresses.join(', ')}\n\n${selectedEmail.bodyText || selectedEmail.snippet}`,
                         });
                         setShowComposeMailModal(true);
@@ -8282,7 +8477,11 @@ function WorkspaceShellContent() {
                         <div className="pt-4 border-t border-slate-100 flex items-center gap-3">
                           <button
                             type="button"
-                            onClick={() => setIsReplyingInline(true)}
+                            onClick={() => {
+                              setIsReplyingInline(true);
+                              setIsEditingReplyRecipient(false);
+                              if (replyRecipient.email) setReplyToEmail(replyRecipient.email);
+                            }}
                             className="px-5 py-2.5 rounded-2xl border border-slate-200/90 hover:border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-2 transition-all cursor-pointer shadow-2xs"
                           >
                             <Reply className="w-4 h-4 text-slate-500" />
@@ -8291,10 +8490,23 @@ function WorkspaceShellContent() {
                           <button
                             type="button"
                             onClick={() => {
+                              const atts = (selectedEmail.attachments && selectedEmail.attachments.length > 0
+                                ? selectedEmail.attachments
+                                : selectedEmail.attachmentsJson) || [];
+                              setComposeAttachments(
+                                atts.map((a: any) => ({
+                                  fileName: a.fileName || 'attachment',
+                                  fileUrl: a.fileUrl,
+                                  fileSize: a.fileSize || 0,
+                                  contentType: a.contentType || 'application/octet-stream',
+                                  base64Data: a.base64Data,
+                                  attachmentId: a.attachmentId || a.id,
+                                }))
+                              );
                               setComposeMailData({
                                 to: '',
                                 cc: '',
-                                subject: `Fwd: ${selectedEmail.subject}`,
+                                subject: selectedEmail.subject.startsWith('Fwd:') ? selectedEmail.subject : `Fwd: ${selectedEmail.subject}`,
                                 body: `\n\n---------- Forwarded message ---------\nFrom: ${selectedEmail.fromName || selectedEmail.fromAddress} <${selectedEmail.fromAddress}>\nDate: ${new Date(selectedEmail.receivedAt).toLocaleString()}\nSubject: ${selectedEmail.subject}\nTo: ${selectedEmail.toAddresses.join(', ')}\n\n${selectedEmail.bodyText || selectedEmail.snippet}`,
                               });
                               setShowComposeMailModal(true);
@@ -8312,12 +8524,50 @@ function WorkspaceShellContent() {
                     {isReplyingInline && (
                       <div className="bg-white rounded-3xl border border-indigo-200 shadow-md p-4 sm:p-6 space-y-4 animate-in fade-in zoom-in-95">
                         <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                          <div className="flex items-center gap-2 text-xs text-slate-600">
-                            <Reply className="w-4 h-4 text-indigo-600" />
-                            <span className="font-bold text-slate-900">
-                              Reply to {selectedEmail.fromName || selectedEmail.fromAddress}
+                          <div className="flex items-center gap-2 text-xs text-slate-600 flex-wrap">
+                            <Reply className="w-4 h-4 text-indigo-600 shrink-0" />
+                            <span className="font-bold text-slate-900 shrink-0">
+                              Reply to
                             </span>
-                            <span className="text-slate-400">&lt;{selectedEmail.fromAddress}&gt;</span>
+                            {isEditingReplyRecipient ? (
+                              <div className="relative inline-block min-w-[260px]">
+                                <input
+                                  type="text"
+                                  value={replyToEmail}
+                                  onChange={(e) => {
+                                    setReplyToEmail(e.target.value);
+                                    setActiveSuggestField('reply');
+                                    setSuggestQuery(getCurrentToken(e.target.value));
+                                    setSuggestIndex(0);
+                                  }}
+                                  onFocus={() => {
+                                    setActiveSuggestField('reply');
+                                    setSuggestQuery(getCurrentToken(replyToEmail));
+                                    setSuggestIndex(0);
+                                  }}
+                                  onKeyDown={(e) => handleRecipientKeyDown(e, 'reply')}
+                                  placeholder="Recipient email address..."
+                                  className="w-full px-2.5 py-1 rounded-xl border border-indigo-300 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 font-medium"
+                                  autoFocus
+                                />
+                                {renderContactSuggestions('reply')}
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="font-bold text-slate-900">
+                                  {replyRecipient.name}
+                                </span>
+                                <span className="text-slate-400 font-mono text-[11px]">&lt;{replyToEmail || replyRecipient.email}&gt;</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setIsEditingReplyRecipient(true)}
+                                  className="p-1 text-slate-400 hover:text-indigo-600 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                                  title="Change reply recipient"
+                                >
+                                  <Pencil className="w-3 h-3" />
+                                </button>
+                              </div>
+                            )}
                           </div>
                           <button
                             type="button"
@@ -15671,24 +15921,52 @@ function WorkspaceShellContent() {
             <div className="space-y-3">
               <div>
                 <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">To</label>
-                <input
-                  type="text"
-                  value={composeMailData.to}
-                  onChange={(e) => setComposeMailData((prev) => ({ ...prev, to: e.target.value }))}
-                  placeholder="recipient@example.com (comma separated)"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium"
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={composeMailData.to}
+                    onChange={(e) => {
+                      setComposeMailData((prev) => ({ ...prev, to: e.target.value }));
+                      setActiveSuggestField('to');
+                      setSuggestQuery(getCurrentToken(e.target.value));
+                      setSuggestIndex(0);
+                    }}
+                    onFocus={() => {
+                      setActiveSuggestField('to');
+                      setSuggestQuery(getCurrentToken(composeMailData.to));
+                      setSuggestIndex(0);
+                    }}
+                    onKeyDown={(e) => handleRecipientKeyDown(e, 'to')}
+                    placeholder="recipient@example.com (comma separated, type name or email to search)"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium"
+                  />
+                  {renderContactSuggestions('to')}
+                </div>
               </div>
 
               <div>
                 <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">CC (Optional)</label>
-                <input
-                  type="text"
-                  value={composeMailData.cc}
-                  onChange={(e) => setComposeMailData((prev) => ({ ...prev, cc: e.target.value }))}
-                  placeholder="colleague@example.com"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium"
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={composeMailData.cc}
+                    onChange={(e) => {
+                      setComposeMailData((prev) => ({ ...prev, cc: e.target.value }));
+                      setActiveSuggestField('cc');
+                      setSuggestQuery(getCurrentToken(e.target.value));
+                      setSuggestIndex(0);
+                    }}
+                    onFocus={() => {
+                      setActiveSuggestField('cc');
+                      setSuggestQuery(getCurrentToken(composeMailData.cc));
+                      setSuggestIndex(0);
+                    }}
+                    onKeyDown={(e) => handleRecipientKeyDown(e, 'cc')}
+                    placeholder="colleague@example.com (type to search)"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all font-medium"
+                  />
+                  {renderContactSuggestions('cc')}
+                </div>
               </div>
 
               <div>
