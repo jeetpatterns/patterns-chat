@@ -9779,7 +9779,6 @@ function WorkspaceShellContent() {
                       const isSentFolder = mailFolder === 'SENT' || msg.folder === 'SENT';
                       const recipientsText = msg.toAddresses && msg.toAddresses.length > 0 ? msg.toAddresses.join(', ') : 'Recipient';
                       const displayTitle = isSentFolder ? `To: ${recipientsText}` : (msg.fromName || msg.fromAddress);
-                      const senderInitial = (isSentFolder ? (recipientsText.slice(0, 1) || 'R') : (msg.fromName || msg.fromAddress || 'M').slice(0, 1)).toUpperCase();
 
                       return (
                         <div
@@ -9822,15 +9821,8 @@ function WorkspaceShellContent() {
                             )}
                           </div>
 
-                          {/* Sender Identity: Avatar + Name */}
-                          <div className="w-44 sm:w-56 md:w-64 shrink-0 flex items-center gap-2.5 min-w-0 pr-3">
-                            <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 shadow-2xs text-[11px] font-bold ${
-                              isSentFolder
-                                ? 'bg-gradient-to-tr from-sky-500 to-indigo-600 text-white'
-                                : 'bg-gradient-to-tr from-indigo-500 via-indigo-600 to-purple-600 text-white'
-                            }`}>
-                              {isSentFolder ? <Send className="w-3 h-3" /> : senderInitial}
-                            </div>
+                          {/* Sender Identity: Name */}
+                          <div className="w-40 sm:w-52 md:w-60 shrink-0 flex items-center min-w-0 pr-3">
                             <span className={`text-xs truncate block ${!msg.isRead ? 'font-bold text-slate-900' : 'font-semibold text-slate-700'}`}>
                               {displayTitle}
                             </span>
