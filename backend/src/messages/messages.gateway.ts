@@ -30,6 +30,7 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
     Map<string, { socketId: string; user: { id: string; name: string; avatarUrl?: string } }>
   >();
   private socketToMeetingMap = new Map<string, string>();
+  private meetingMetadataMap = new Map<string, { channelId?: string; workspaceId?: string; startedAt: number }>();
 
   // Real-time user presence tracking
   private userSocketsMap = new Map<string, Set<string>>(); // userId -> Set<socketId>
@@ -136,6 +137,69 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
     }
   }
 
+  @SubscribeMessage('join_workspace')
+  handleJoinWorkspace(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { workspaceId: string },
+  ) {
+    if (data?.workspaceId) {
+      const room = `workspace:${data.workspaceId}`;
+      client.join(room);
+      this.logger.log(`🏢 Socket ${client.id} joined workspace room ${room}`);
+
+      // Send currently active channel meetings in this workspace
+      const activeList: Array<{ meetingId: string; channelId: string; participantCount: number; isActive: boolean }> = [];
+      for (const [meetingId, participants] of this.activeMeetingRooms.entries()) {
+        const meta = this.meetingMetadataMap.get(meetingId);
+        if (participants.size > 0 && meta?.channelId && (!meta.workspaceId || meta.workspaceId === data.workspaceId)) {
+          activeList.push({
+            meetingId,
+            channelId: meta.channelId,
+            participantCount: participants.size,
+            isActive: true,
+          });
+        }
+      }
+      client.emit('active_channel_meetings_list', activeList);
+      return { event: 'joined_workspace', workspaceId: data.workspaceId };
+    }
+  }
+
+  @SubscribeMessage('leave_workspace')
+  handleLeaveWorkspace(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { workspaceId: string },
+  ) {
+    if (data?.workspaceId) {
+      const room = `workspace:${data.workspaceId}`;
+      client.leave(room);
+      this.logger.log(`🏢 Socket ${client.id} left workspace room ${room}`);
+      return { event: 'left_workspace', workspaceId: data.workspaceId };
+    }
+  }
+
+  @SubscribeMessage('get_active_channel_meetings')
+  handleGetActiveMeetings(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { workspaceId?: string },
+  ) {
+    const activeList: Array<{ meetingId: string; channelId: string; participantCount: number; isActive: boolean }> = [];
+    for (const [meetingId, participants] of this.activeMeetingRooms.entries()) {
+      const meta = this.meetingMetadataMap.get(meetingId);
+      if (participants.size > 0 && meta?.channelId) {
+        if (!data?.workspaceId || meta.workspaceId === data.workspaceId) {
+          activeList.push({
+            meetingId,
+            channelId: meta.channelId,
+            participantCount: participants.size,
+            isActive: true,
+          });
+        }
+      }
+    }
+    client.emit('active_channel_meetings_list', activeList);
+  }
+
   @SubscribeMessage('join_conversation')
   handleJoinConversation(
     @ConnectedSocket() client: Socket,
@@ -159,32 +223,6 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
       client.leave(room);
       this.logger.log(`💬 Socket ${client.id} left conversation room ${room}`);
       return { event: 'left_conversation', conversationId: data.conversationId };
-    }
-  }
-
-  @SubscribeMessage('join_workspace')
-  handleJoinWorkspace(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { workspaceId: string },
-  ) {
-    if (data?.workspaceId) {
-      const room = `workspace:${data.workspaceId}`;
-      client.join(room);
-      this.logger.log(`🏢 Socket ${client.id} joined workspace room ${room}`);
-      return { event: 'joined_workspace', workspaceId: data.workspaceId };
-    }
-  }
-
-  @SubscribeMessage('leave_workspace')
-  handleLeaveWorkspace(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { workspaceId: string },
-  ) {
-    if (data?.workspaceId) {
-      const room = `workspace:${data.workspaceId}`;
-      client.leave(room);
-      this.logger.log(`🏢 Socket ${client.id} left workspace room ${room}`);
-      return { event: 'left_workspace', workspaceId: data.workspaceId };
     }
   }
 
@@ -736,6 +774,18 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
       this.activeMeetingRooms.set(meetingId, new Map());
     }
 
+    if (!this.meetingMetadataMap.has(meetingId)) {
+      this.meetingMetadataMap.set(meetingId, {
+        channelId,
+        workspaceId,
+        startedAt: Date.now(),
+      });
+    } else {
+      const existing = this.meetingMetadataMap.get(meetingId)!;
+      if (channelId && !existing.channelId) existing.channelId = channelId;
+      if (workspaceId && !existing.workspaceId) existing.workspaceId = workspaceId;
+    }
+
     const roomParticipants = this.activeMeetingRooms.get(meetingId)!;
     const existingList = Array.from(roomParticipants.values());
 
@@ -766,17 +816,28 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
       user,
     });
 
-    if (channelId) {
-      this.server.to(`channel:${channelId}`).emit('channel_meeting_status', {
+    const meta = this.meetingMetadataMap.get(meetingId);
+    const targetChannelId = channelId || meta?.channelId;
+    const targetWorkspaceId = workspaceId || meta?.workspaceId;
+
+    if (targetChannelId) {
+      this.server.to(`channel:${targetChannelId}`).emit('channel_meeting_status', {
         meetingId,
-        channelId,
+        channelId: targetChannelId,
         isActive: true,
         participantCount: roomParticipants.size,
       });
     }
-    if (workspaceId) {
-      this.server.to(`workspace:${workspaceId}`).emit('workspace_meeting_status', {
+    if (targetWorkspaceId) {
+      this.server.to(`workspace:${targetWorkspaceId}`).emit('channel_meeting_status', {
         meetingId,
+        channelId: targetChannelId,
+        isActive: true,
+        participantCount: roomParticipants.size,
+      });
+      this.server.to(`workspace:${targetWorkspaceId}`).emit('workspace_meeting_status', {
+        meetingId,
+        channelId: targetChannelId,
         isActive: true,
         participantCount: roomParticipants.size,
       });
@@ -901,21 +962,33 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
       const remaining = roomParticipants.size;
       this.logger.log(`🚪 User left group meeting ${meetingId}. Remaining: ${remaining}`);
 
+      const meta = this.meetingMetadataMap.get(meetingId);
+      const targetChannelId = channelId || meta?.channelId;
+      const targetWorkspaceId = workspaceId || meta?.workspaceId;
+
       if (remaining === 0) {
         this.activeMeetingRooms.delete(meetingId);
+        this.meetingMetadataMap.delete(meetingId);
       }
 
-      if (channelId) {
-        this.server.to(`channel:${channelId}`).emit('channel_meeting_status', {
+      if (targetChannelId) {
+        this.server.to(`channel:${targetChannelId}`).emit('channel_meeting_status', {
           meetingId,
-          channelId,
+          channelId: targetChannelId,
           isActive: remaining > 0,
           participantCount: remaining,
         });
       }
-      if (workspaceId) {
-        this.server.to(`workspace:${workspaceId}`).emit('workspace_meeting_status', {
+      if (targetWorkspaceId) {
+        this.server.to(`workspace:${targetWorkspaceId}`).emit('channel_meeting_status', {
           meetingId,
+          channelId: targetChannelId,
+          isActive: remaining > 0,
+          participantCount: remaining,
+        });
+        this.server.to(`workspace:${targetWorkspaceId}`).emit('workspace_meeting_status', {
+          meetingId,
+          channelId: targetChannelId,
           isActive: remaining > 0,
           participantCount: remaining,
         });

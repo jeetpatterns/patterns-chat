@@ -641,6 +641,10 @@ function WorkspaceShellContent() {
   const incomingCallNotifRef = useRef<any | null>(null);
   const tabTitleIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const originalTitleRef = useRef<string>('Patterns');
+  const [channelMeetingMap, setChannelMeetingMap] = useState<Record<string, { meetingId: string; isActive: boolean; participantCount: number }>>({});
+  const callRecordingCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const callRecordingAnimRef = useRef<number | null>(null);
+  const callRecordingVideoElRef = useRef<HTMLVideoElement | null>(null);
 
   // Saved Call Recordings in PostgreSQL State
   interface SavedRecording {
@@ -4141,35 +4145,163 @@ function WorkspaceShellContent() {
         }
       }
 
-      // 3. Assemble combined recording stream
+      // 3. Mix screen audio if user is sharing screen with audio
+      if (screenStreamRef.current && screenStreamRef.current.getAudioTracks().length > 0) {
+        try {
+          const screenAudioSource = audioCtx.createMediaStreamSource(screenStreamRef.current);
+          screenAudioSource.connect(dest);
+        } catch (e) {
+          console.warn('Could not connect screen audio to recorder:', e);
+        }
+      }
+
+      // 4. Create Offscreen Canvas Compositor (1280x720 30FPS)
+      const canvas = document.createElement('canvas');
+      canvas.width = 1280;
+      canvas.height = 720;
+      const ctx = canvas.getContext('2d');
+      callRecordingCanvasRef.current = canvas;
+
+      // Hidden video element to decode whichever video track is active
+      const videoEl = document.createElement('video');
+      videoEl.autoplay = true;
+      videoEl.muted = true;
+      videoEl.playsInline = true;
+      callRecordingVideoElRef.current = videoEl;
+
+      let currentDecodedTrackId: string | null = null;
+      let frameCount = 0;
+
+      const renderFrame = () => {
+        if (!ctx) return;
+        frameCount++;
+
+        // Priority 1: Screen share (local or remote)
+        const localScreenTrack = screenStreamRef.current?.getVideoTracks().find((t) => t.readyState === 'live');
+        const remoteVideoTracks = remoteStreamRef.current?.getVideoTracks().filter((t) => t.readyState === 'live' && !t.muted) || [];
+        const remoteScreenTrack = isPeerScreenSharing ? remoteVideoTracks[0] : null;
+
+        // Priority 2: Remote camera
+        const remoteCamTrack = !isPeerScreenSharing ? remoteVideoTracks[0] : null;
+
+        // Priority 3: Local camera
+        const localCamTrack = !isVideoMuted ? localStreamRef.current?.getVideoTracks().find((t) => t.readyState === 'live') : null;
+
+        const bestTrack = localScreenTrack || remoteScreenTrack || remoteCamTrack || localCamTrack;
+        const isScreen = !!(localScreenTrack || remoteScreenTrack);
+
+        if (bestTrack) {
+          if (currentDecodedTrackId !== bestTrack.id) {
+            currentDecodedTrackId = bestTrack.id;
+            videoEl.srcObject = new MediaStream([bestTrack]);
+            videoEl.play().catch(() => {});
+          }
+
+          if (videoEl.readyState >= 2 && videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(0, 0, 1280, 720);
+
+            const hRatio = 1280 / videoEl.videoWidth;
+            const vRatio = 720 / videoEl.videoHeight;
+            const ratio = Math.min(hRatio, vRatio);
+            const w = videoEl.videoWidth * ratio;
+            const h = videoEl.videoHeight * ratio;
+            const x = (1280 - w) / 2;
+            const y = (720 - h) / 2;
+
+            ctx.drawImage(videoEl, 0, 0, videoEl.videoWidth, videoEl.videoHeight, x, y, w, h);
+
+            // Watermark / Badge
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+            ctx.beginPath();
+            ctx.roundRect(24, 20, isScreen ? 340 : 280, 42, 10);
+            ctx.fill();
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 15px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+            ctx.fillText(
+              isScreen
+                ? `🖥️ ${localScreenTrack ? 'Your Screen' : `${callPeer?.name || 'Peer'}'s Screen`}`
+                : `📹 Call with ${callPeer?.name || 'Teammate'}`,
+              38,
+              47
+            );
+
+            // Recording dot
+            ctx.fillStyle = '#ef4444';
+            ctx.beginPath();
+            ctx.arc(1280 - 110, 41, 6, 0, 2 * Math.PI);
+            ctx.fill();
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 14px monospace';
+            ctx.fillText('REC', 1280 - 95, 46);
+          } else {
+            drawFallbackScreen();
+          }
+        } else {
+          currentDecodedTrackId = null;
+          drawFallbackScreen();
+        }
+
+        callRecordingAnimRef.current = requestAnimationFrame(renderFrame);
+      };
+
+      function drawFallbackScreen() {
+        if (!ctx) return;
+        const grad = ctx.createLinearGradient(0, 0, 1280, 720);
+        grad.addColorStop(0, '#0f172a');
+        grad.addColorStop(0.5, '#1e1b4b');
+        grad.addColorStop(1, '#020617');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 1280, 720);
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 28px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`Voice Call: ${user?.name || 'You'} & ${callPeer?.name || 'Teammate'}`, 640, 260);
+
+        ctx.fillStyle = '#ef4444';
+        ctx.beginPath();
+        ctx.arc(615, 330, 7, 0, 2 * Math.PI);
+        ctx.fill();
+
+        ctx.fillStyle = '#f87171';
+        ctx.font = 'bold 16px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(`REC ${formatCallDuration(recordingDuration)}`, 630, 335);
+
+        ctx.fillStyle = '#818cf8';
+        const barCount = 18;
+        const startX = 640 - (barCount * 14) / 2;
+        for (let i = 0; i < barCount; i++) {
+          const barH = 12 + Math.abs(Math.sin((frameCount * 0.1) + i * 0.4)) * 40;
+          ctx.beginPath();
+          ctx.roundRect(startX + i * 14, 420 - barH / 2, 8, barH, 4);
+          ctx.fill();
+        }
+
+        ctx.textAlign = 'left';
+      }
+
+      renderFrame();
+
+      // 5. Video stream from canvas (Always guaranteed continuous 30 FPS video)
+      const canvasStream = canvas.captureStream(30);
+      const canvasVideoTrack = canvasStream.getVideoTracks()[0];
+
       const recordStream = new MediaStream();
+      if (canvasVideoTrack) recordStream.addTrack(canvasVideoTrack);
       const mixedAudioTrack = dest.stream.getAudioTracks()[0];
-      if (mixedAudioTrack) {
-        recordStream.addTrack(mixedAudioTrack);
-      }
+      if (mixedAudioTrack) recordStream.addTrack(mixedAudioTrack);
 
-      // For video calls, attach live video track (remote video, screen share, or local camera)
-      const activeVideoTrack =
-        remoteStreamRef.current?.getVideoTracks().find((t) => t.readyState === 'live') ||
-        screenStreamRef.current?.getVideoTracks().find((t) => t.readyState === 'live') ||
-        localStreamRef.current?.getVideoTracks().find((t) => t.readyState === 'live');
-
-      const isVideoRecording = callType === 'video' && !!activeVideoTrack;
-      if (isVideoRecording && activeVideoTrack) {
-        recordStream.addTrack(activeVideoTrack);
-      }
-
-      // Determine best supported MIME type
-      let mimeType = '';
       const candidateTypes = [
         'video/webm;codecs=vp9,opus',
         'video/webm;codecs=vp8,opus',
         'video/webm',
         'video/mp4',
-        'audio/webm;codecs=opus',
-        'audio/webm',
-        'audio/ogg',
       ];
+      let mimeType = 'video/webm';
       for (const type of candidateTypes) {
         if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(type)) {
           mimeType = type;
@@ -4177,7 +4309,7 @@ function WorkspaceShellContent() {
         }
       }
 
-      const recorder = new MediaRecorder(recordStream, mimeType ? { mimeType } : undefined);
+      const recorder = new MediaRecorder(recordStream, { mimeType, videoBitsPerSecond: 2500000 });
       mediaRecorderRef.current = recorder;
 
       recorder.ondataavailable = (event) => {
@@ -4187,14 +4319,25 @@ function WorkspaceShellContent() {
       };
 
       recorder.onstop = async () => {
-        const hasVideo = recordStream.getVideoTracks().length > 0;
-        const blobType = mimeType || (hasVideo ? 'video/webm' : 'audio/webm');
-        const blob = new Blob(recordedChunksRef.current, { type: blobType });
+        if (callRecordingAnimRef.current) {
+          cancelAnimationFrame(callRecordingAnimRef.current);
+          callRecordingAnimRef.current = null;
+        }
+        if (callRecordingVideoElRef.current) {
+          callRecordingVideoElRef.current.srcObject = null;
+          callRecordingVideoElRef.current = null;
+        }
+        if (recordingAudioCtxRef.current) {
+          try { recordingAudioCtxRef.current.close(); } catch (e) {}
+          recordingAudioCtxRef.current = null;
+        }
+
+        const blob = new Blob(recordedChunksRef.current, { type: mimeType });
         if (blob.size > 0) {
           const url = URL.createObjectURL(blob);
           const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
           const ext = 'webm';
-          const fileName = `${hasVideo ? 'video' : 'call'}-recording-${callPeerRef.current?.name?.replace(/\s+/g, '_') || 'teamflow'}-${timestamp}.${ext}`;
+          const fileName = `call-recording-${callPeerRef.current?.name?.replace(/\s+/g, '_') || 'patterns'}-${timestamp}.${ext}`;
           const duration = recordingDuration;
           const sizeFormatted = formatFileSize(blob.size);
 
@@ -4203,20 +4346,31 @@ function WorkspaceShellContent() {
             url,
             fileName,
             duration,
-            isVideo: hasVideo,
+            isVideo: true,
             sizeFormatted,
           });
+
+          // AUTOMATIC DEVICE DOWNLOAD
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = fileName;
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(() => {
+            document.body.removeChild(a);
+          }, 3000);
+
+          setCallNotificationMsg(`Recording downloaded to your device as "${fileName}"! 🎬`);
 
           // Upload and save directly in PostgreSQL database via /api/recordings
           if (token && workspaceId) {
             try {
-              setCallNotificationMsg('Saving call recording to database...');
               const formData = new FormData();
-              const file = new (window as any).File([blob], fileName, { type: blobType });
+              const file = new (window as any).File([blob], fileName, { type: mimeType });
               formData.append('file', file);
               formData.append('workspaceId', workspaceId);
               formData.append('duration', String(duration));
-              formData.append('isVideo', String(hasVideo));
+              formData.append('isVideo', 'true');
               if (activeChannel?.id) formData.append('channelId', activeChannel.id);
               if (activeConversation?.id) formData.append('conversationId', activeConversation.id);
               if (callPeerRef.current?.id) formData.append('peerId', callPeerRef.current.id);
@@ -4230,23 +4384,14 @@ function WorkspaceShellContent() {
               });
 
               if (recRes.ok) {
-                setCallNotificationMsg('✅ Call recording saved to database & chat!');
+                setCallNotificationMsg('✅ Call recording saved to database & chat, and downloaded to device!');
                 loadWorkspaceRecordings();
-              } else {
-                setCallNotificationMsg('Recording saved locally! Ready to preview or download.');
               }
             } catch (err) {
               console.warn('Could not auto-save recording to backend:', err);
-              setCallNotificationMsg('Recording saved! Ready to preview or download.');
             }
           }
           setTimeout(() => setCallNotificationMsg(null), 5000);
-        }
-        if (recordingAudioCtxRef.current) {
-          try {
-            recordingAudioCtxRef.current.close();
-          } catch (e) {}
-          recordingAudioCtxRef.current = null;
         }
       };
 
@@ -4267,8 +4412,8 @@ function WorkspaceShellContent() {
         });
       }
 
-      setCallNotificationMsg('Call recording started');
-      setTimeout(() => setCallNotificationMsg(null), 3000);
+      setCallNotificationMsg('🔴 Recording started. Screen share, video, and audio are being recorded!');
+      setTimeout(() => setCallNotificationMsg(null), 3500);
     } catch (err: any) {
       console.error('Failed to start recording:', err);
       alert(`Could not start call recording: ${err.message || 'MediaRecorder error'}`);
@@ -4280,6 +4425,14 @@ function WorkspaceShellContent() {
     if (recordingTimerRef.current) {
       clearInterval(recordingTimerRef.current);
       recordingTimerRef.current = null;
+    }
+    if (callRecordingAnimRef.current) {
+      cancelAnimationFrame(callRecordingAnimRef.current);
+      callRecordingAnimRef.current = null;
+    }
+    if (callRecordingVideoElRef.current) {
+      callRecordingVideoElRef.current.srcObject = null;
+      callRecordingVideoElRef.current = null;
     }
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       try {
@@ -5280,6 +5433,49 @@ function WorkspaceShellContent() {
       Notification.requestPermission().catch(() => {});
     }
 
+    function handleChannelMeetingStatus(data: {
+      meetingId: string;
+      channelId: string;
+      isActive: boolean;
+      participantCount: number;
+    }) {
+      if (!data?.channelId) return;
+      setChannelMeetingMap((prev) => {
+        if (!data.isActive || data.participantCount === 0) {
+          const next = { ...prev };
+          delete next[data.channelId];
+          return next;
+        }
+        return {
+          ...prev,
+          [data.channelId]: {
+            meetingId: data.meetingId,
+            isActive: data.isActive,
+            participantCount: data.participantCount,
+          },
+        };
+      });
+    }
+
+    function handleActiveChannelMeetingsList(
+      list: Array<{ meetingId: string; channelId: string; isActive: boolean; participantCount: number }>
+    ) {
+      if (!Array.isArray(list)) return;
+      const map: Record<string, { meetingId: string; isActive: boolean; participantCount: number }> = {};
+      list.forEach((item) => {
+        if (item.channelId && item.isActive && item.participantCount > 0) {
+          map[item.channelId] = item;
+        }
+      });
+      setChannelMeetingMap(map);
+    }
+
+    socket.on('channel_meeting_status', handleChannelMeetingStatus);
+    socket.on('active_channel_meetings_list', handleActiveChannelMeetingsList);
+    if (workspaceId) {
+      socket.emit('get_active_channel_meetings', { workspaceId });
+    }
+
     socket.on('new_notification', handleNewNotification);
     socket.on('message_pinned', handleMessagePinned);
     socket.on('direct_message_pinned', handleDirectMessagePinned);
@@ -5295,6 +5491,8 @@ function WorkspaceShellContent() {
         socket.emit('leave_workspace', { workspaceId });
       }
       socket.emit('leave_user', { userId: user.id });
+      socket.off('channel_meeting_status', handleChannelMeetingStatus);
+      socket.off('active_channel_meetings_list', handleActiveChannelMeetingsList);
       socket.off('new_notification', handleNewNotification);
       socket.off('message_pinned', handleMessagePinned);
       socket.off('direct_message_pinned', handleDirectMessagePinned);
@@ -10816,40 +11014,44 @@ function WorkspaceShellContent() {
               </button>
             )}
 
-            {/* Instant Team Meeting Button */}
-            {!activeRecipient && !showCalendarView && activeChannel && (
-              <button
-                type="button"
-                onClick={() => {
-                  const targetList = (!activeChannel.isPrivate
-                    ? members
-                    : (activeChannelMembers.length > 0 ? activeChannelMembers : members)
-                  );
-                  const instantMeeting: Meeting = {
-                    id: `meeting-${activeChannel.id}`,
-                    workspaceId,
-                    title: `${activeChannel.name} Team Meeting`,
-                    description: `Live group conference for #${activeChannel.name}`,
-                    scheduledAt: new Date().toISOString(),
-                    duration: 60,
-                    hostId: user?.id || '',
-                    channelId: activeChannel.id,
-                    status: 'LIVE' as const,
-                    createdAt: new Date().toISOString(),
-                    host: user ? { id: user.id, name: user.name, email: user.email, avatarUrl: user.avatarUrl } : { id: '', name: 'Host', email: '' },
-                    channel: { id: activeChannel.id, name: activeChannel.name },
-                    participants: targetList.map((m) => ({
-                      id: `p-${m.id}`,
-                      meetingId: `meeting-${activeChannel.id}`,
-                      userId: m.user.id,
-                      role: ((m as any).role as WorkspaceRole) || 'MEMBER',
-                      status: 'ACCEPTED' as const,
-                      user: m.user,
-                    })),
-                  };
-                  setActiveTeamMeeting(instantMeeting);
+            {/* Instant Team Meeting or Join Meeting Button */}
+            {!activeRecipient && !showCalendarView && activeChannel && (() => {
+              const activeMeetingInfo = channelMeetingMap[activeChannel.id];
+              const isLiveMeeting = !!(activeMeetingInfo?.isActive && (activeMeetingInfo.participantCount ?? 0) > 0);
 
-                  // Ring all other channel members!
+              const handleJoinOrStart = () => {
+                const targetList = (!activeChannel.isPrivate
+                  ? members
+                  : (activeChannelMembers.length > 0 ? activeChannelMembers : members)
+                );
+                const meetingId = activeMeetingInfo?.meetingId || `meeting-${activeChannel.id}`;
+                const instantMeeting: Meeting = {
+                  id: meetingId,
+                  workspaceId,
+                  title: `${activeChannel.name} Team Meeting`,
+                  description: `Live group conference for #${activeChannel.name}`,
+                  scheduledAt: new Date().toISOString(),
+                  duration: 60,
+                  hostId: user?.id || '',
+                  channelId: activeChannel.id,
+                  status: 'LIVE' as const,
+                  createdAt: new Date().toISOString(),
+                  host: user ? { id: user.id, name: user.name, email: user.email, avatarUrl: user.avatarUrl } : { id: '', name: 'Host', email: '' },
+                  channel: { id: activeChannel.id, name: activeChannel.name },
+                  participants: targetList.map((m) => ({
+                    id: `p-${m.id}`,
+                    meetingId,
+                    userId: m.user.id,
+                    role: ((m as any).role as WorkspaceRole) || 'MEMBER',
+                    status: 'ACCEPTED' as const,
+                    user: m.user,
+                  })),
+                };
+                setActiveTeamMeeting(instantMeeting);
+
+                // Only ring other members if this is a BRAND NEW meeting!
+                // If meeting is already active with participants, user joins directly without ringing!
+                if (!isLiveMeeting) {
                   const targetUserIds = targetList
                     .map((m) => m.user.id)
                     .filter((id) => id !== user?.id);
@@ -10865,14 +11067,35 @@ function WorkspaceShellContent() {
                       targetUserIds,
                     });
                   }
-                }}
-                className="h-8.5 flex items-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white px-3 text-xs font-semibold transition-all shadow-xs shrink-0 active:scale-95 cursor-pointer"
-                title="Start or join Team Video Meeting"
-              >
-                <Video className="h-3.5 w-3.5 shrink-0" />
-                <span className="hidden sm:inline">Team Meeting</span>
-              </button>
-            )}
+                }
+              };
+
+              return isLiveMeeting ? (
+                <button
+                  type="button"
+                  onClick={handleJoinOrStart}
+                  className="h-8.5 flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white px-3 text-xs font-bold transition-all shadow-md shrink-0 active:scale-95 cursor-pointer ring-2 ring-emerald-400/50"
+                  title={`Join ongoing team meeting in #${activeChannel.name} (${activeMeetingInfo.participantCount} in call)`}
+                >
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-200 opacity-80"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
+                  </span>
+                  <Video className="h-3.5 w-3.5 shrink-0" />
+                  <span>Join Meeting ({activeMeetingInfo.participantCount})</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleJoinOrStart}
+                  className="h-8.5 flex items-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white px-3 text-xs font-semibold transition-all shadow-xs shrink-0 active:scale-95 cursor-pointer"
+                  title="Start Team Video Meeting and ring members"
+                >
+                  <Video className="h-3.5 w-3.5 shrink-0" />
+                  <span className="hidden sm:inline">Team Meeting</span>
+                </button>
+              );
+            })()}
 
             {/* Pinned Messages Button */}
             <button
@@ -11575,6 +11798,61 @@ function WorkspaceShellContent() {
               </div>
             ) : (
               <div className="flex-1 flex flex-col justify-between overflow-hidden bg-white">
+                {/* Live Channel Meeting Banner */}
+                {(() => {
+                  const meetingInfo = channelMeetingMap[activeChannel?.id || ''];
+                  if (!meetingInfo?.isActive || (meetingInfo.participantCount ?? 0) <= 0 || activeTeamMeeting) return null;
+                  return (
+                    <div className="bg-gradient-to-r from-emerald-950 via-emerald-900 to-slate-900 border-b border-emerald-500/30 px-4 py-2.5 flex items-center justify-between gap-3 text-xs text-emerald-100 shadow-sm shrink-0 z-10 animate-in fade-in slide-in-from-top-1 duration-200">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="relative flex h-2.5 w-2.5 shrink-0">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-400"></span>
+                        </span>
+                        <span className="font-bold text-white tracking-wide">Live Team Meeting in #{activeChannel?.name}</span>
+                        <span className="text-emerald-300/90 hidden sm:inline">• {meetingInfo.participantCount} member{meetingInfo.participantCount !== 1 ? 's' : ''} currently in call</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const targetList = (!activeChannel?.isPrivate
+                            ? members
+                            : (activeChannelMembers.length > 0 ? activeChannelMembers : members)
+                          );
+                          const meetingId = meetingInfo.meetingId || `meeting-${activeChannel?.id}`;
+                          const instantMeeting: Meeting = {
+                            id: meetingId,
+                            workspaceId,
+                            title: `${activeChannel?.name} Team Meeting`,
+                            description: `Live group conference for #${activeChannel?.name}`,
+                            scheduledAt: new Date().toISOString(),
+                            duration: 60,
+                            hostId: user?.id || '',
+                            channelId: activeChannel?.id,
+                            status: 'LIVE' as const,
+                            createdAt: new Date().toISOString(),
+                            host: user ? { id: user.id, name: user.name, email: user.email, avatarUrl: user.avatarUrl } : { id: '', name: 'Host', email: '' },
+                            channel: activeChannel ? { id: activeChannel.id, name: activeChannel.name } : undefined,
+                            participants: targetList.map((m) => ({
+                              id: `p-${m.id}`,
+                              meetingId,
+                              userId: m.user.id,
+                              role: ((m as any).role as WorkspaceRole) || 'MEMBER',
+                              status: 'ACCEPTED' as const,
+                              user: m.user,
+                            })),
+                          };
+                          setActiveTeamMeeting(instantMeeting);
+                        }}
+                        className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold flex items-center gap-1.5 shrink-0 transition-all cursor-pointer shadow-xs active:scale-95"
+                      >
+                        <Video className="w-3.5 h-3.5" />
+                        <span>Join Meeting</span>
+                      </button>
+                    </div>
+                  );
+                })()}
+
                 {/* Message Feed Stream */}
                 <div className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 sm:py-6 space-y-3">
                   {/* Modern Start-Of-Channel Hero */}

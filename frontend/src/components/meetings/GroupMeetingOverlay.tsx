@@ -180,6 +180,10 @@ export function GroupMeetingOverlay({
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
   const speakingTimersRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(null);
+  const recordingCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const recordingAnimRef = useRef<number | null>(null);
+  const recordingVideoElRef = useRef<HTMLVideoElement | null>(null);
+  const recordingAudioCtxRef = useRef<AudioContext | null>(null);
 
   // ── Meeting Timer ──────────────────────────────────────────────
   useEffect(() => {
@@ -247,6 +251,7 @@ export function GroupMeetingOverlay({
 
         socket.emit('join_team_meeting', {
           meetingId,
+          channelId,
           workspaceId,
           user: { id: user.id, name: user.name, avatarUrl: user.avatarUrl, role: userRole },
         });
@@ -584,7 +589,19 @@ export function GroupMeetingOverlay({
 
   // ── Cleanup ────────────────────────────────────────────────────
   function cleanupAll() {
-    socket.emit('leave_team_meeting', { meetingId, workspaceId });
+    if (mediaRecorderRef.current && isRecording) {
+      try {
+        if (mediaRecorderRef.current.state !== 'inactive') {
+          mediaRecorderRef.current.stop();
+        }
+      } catch (e) {}
+    }
+    if (recordingAnimRef.current) {
+      cancelAnimationFrame(recordingAnimRef.current);
+      recordingAnimRef.current = null;
+    }
+
+    socket.emit('leave_team_meeting', { meetingId, channelId, workspaceId });
     peerConnectionsRef.current.forEach((pc) => pc.close());
     peerConnectionsRef.current.clear();
     pendingCandidatesRef.current.clear();
@@ -600,7 +617,6 @@ export function GroupMeetingOverlay({
     const stream = localStreamRef.current;
     if (stream) stream.getTracks().forEach((t) => t.stop());
     if (screenStreamRef.current) screenStreamRef.current.getTracks().forEach((t) => t.stop());
-    if (mediaRecorderRef.current && isRecording) mediaRecorderRef.current.stop();
     if (callTimerRef.current) clearInterval(callTimerRef.current);
     if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
     speakingTimersRef.current.forEach((t) => clearTimeout(t));
@@ -875,7 +891,7 @@ export function GroupMeetingOverlay({
     }
   }
 
-  // ── In-Meeting Recording (Mixes Local + Remote Audio + Active Screen/Camera) ──
+  // ── In-Meeting Recording (Mixes Local + Remote Audio + Dynamic Canvas Screen/Camera/Visualizer) ──
   function startRecording() {
     if (isRecording) return;
     try {
@@ -886,9 +902,10 @@ export function GroupMeetingOverlay({
         return;
       }
       const audioCtx = new AudioCtx();
+      recordingAudioCtxRef.current = audioCtx;
       const dest = audioCtx.createMediaStreamDestination();
 
-      // 1. Connect local audio
+      // 1. Connect local mic audio
       if (localStreamRef.current && localStreamRef.current.getAudioTracks().length > 0) {
         try {
           const src = audioCtx.createMediaStreamSource(localStreamRef.current);
@@ -896,7 +913,15 @@ export function GroupMeetingOverlay({
         } catch (e) {}
       }
 
-      // 2. Connect all remote peer audio tracks
+      // 2. Connect screen audio if present
+      if (screenStreamRef.current && screenStreamRef.current.getAudioTracks().length > 0) {
+        try {
+          const screenSrc = audioCtx.createMediaStreamSource(screenStreamRef.current);
+          screenSrc.connect(dest);
+        } catch (e) {}
+      }
+
+      // 3. Connect all remote peer audio tracks
       peersArray.forEach((peer) => {
         if (peer.stream && peer.stream.getAudioTracks().length > 0) {
           try {
@@ -906,45 +931,224 @@ export function GroupMeetingOverlay({
         }
       });
 
-      // 3. Assemble record stream
+      // 4. Create Offscreen Canvas Compositor (1280x720 30FPS)
+      const canvas = document.createElement('canvas');
+      canvas.width = 1280;
+      canvas.height = 720;
+      const ctx = canvas.getContext('2d');
+      recordingCanvasRef.current = canvas;
+
+      // Hidden Video element to decode the active video/screen track onto canvas
+      const videoEl = document.createElement('video');
+      videoEl.autoplay = true;
+      videoEl.muted = true;
+      videoEl.playsInline = true;
+      recordingVideoElRef.current = videoEl;
+
+      let currentDecodedTrackId: string | null = null;
+      let frameCount = 0;
+
+      // 5. Canvas Compositing Loop (Draws screen share if active, camera if active, or sleek meeting card)
+      const renderFrame = () => {
+        if (!ctx) return;
+        frameCount++;
+
+        // Determine what to record:
+        // Priority 1: Screen share (local or remote)
+        const localScreenTrack = screenStreamRef.current?.getVideoTracks().find((t) => t.readyState === 'live');
+        const remoteScreenPeer = peersArray.find((p) => p.isScreenSharing);
+        const remoteScreenTrack = remoteScreenPeer?.stream?.getVideoTracks().find((t) => t.readyState === 'live' && !t.muted);
+
+        // Priority 2: Pinned or Spotlight participant
+        const pinnedPeer = pinnedSocketId && pinnedSocketId !== 'self' ? peersArray.find((p) => p.socketId === pinnedSocketId) : null;
+        const pinnedTrack = pinnedPeer?.stream?.getVideoTracks().find((t) => t.readyState === 'live' && !t.muted);
+
+        // Priority 3: Any peer with active camera
+        const activePeerCam = peersArray.find((p) => p.stream?.getVideoTracks().some((t) => t.readyState === 'live' && !t.muted));
+        const remoteCamTrack = activePeerCam?.stream?.getVideoTracks().find((t) => t.readyState === 'live' && !t.muted);
+
+        // Priority 4: Local camera
+        const localCamTrack = !isVideoMuted ? localStreamRef.current?.getVideoTracks().find((t) => t.readyState === 'live') : null;
+
+        const bestTrack = localScreenTrack || remoteScreenTrack || pinnedTrack || remoteCamTrack || localCamTrack;
+        const isScreen = !!(localScreenTrack || remoteScreenTrack);
+
+        if (bestTrack) {
+          if (currentDecodedTrackId !== bestTrack.id) {
+            currentDecodedTrackId = bestTrack.id;
+            videoEl.srcObject = new MediaStream([bestTrack]);
+            videoEl.play().catch(() => {});
+          }
+
+          if (videoEl.readyState >= 2 && videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
+            // Fill background with dark letterbox
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(0, 0, 1280, 720);
+
+            // Compute aspect ratio letterbox
+            const hRatio = 1280 / videoEl.videoWidth;
+            const vRatio = 720 / videoEl.videoHeight;
+            const ratio = Math.min(hRatio, vRatio);
+            const w = videoEl.videoWidth * ratio;
+            const h = videoEl.videoHeight * ratio;
+            const x = (1280 - w) / 2;
+            const y = (720 - h) / 2;
+
+            ctx.drawImage(videoEl, 0, 0, videoEl.videoWidth, videoEl.videoHeight, x, y, w, h);
+
+            // Overlays: Top header badge
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+            ctx.beginPath();
+            ctx.roundRect(24, 20, isScreen ? 340 : 280, 42, 10);
+            ctx.fill();
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 15px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+            ctx.fillText(
+              isScreen
+                ? `🖥️ ${localScreenTrack ? 'Your Screen' : `${remoteScreenPeer?.user?.name || 'Peer'}'s Screen`}`
+                : `📹 ${meetingTitle || 'Team Meeting'}`,
+              38,
+              47
+            );
+
+            // Recording badge
+            ctx.fillStyle = 'rgba(239, 68, 68, 0.9)';
+            ctx.beginPath();
+            ctx.arc(1280 - 110, 41, 6, 0, 2 * Math.PI);
+            ctx.fill();
+
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 14px monospace';
+            ctx.fillText('REC', 1280 - 95, 46);
+          } else {
+            drawFallbackScreen();
+          }
+        } else {
+          currentDecodedTrackId = null;
+          drawFallbackScreen();
+        }
+
+        recordingAnimRef.current = requestAnimationFrame(renderFrame);
+      };
+
+      function drawFallbackScreen() {
+        if (!ctx) return;
+        // Elegant gradient
+        const grad = ctx.createLinearGradient(0, 0, 1280, 720);
+        grad.addColorStop(0, '#0f172a');
+        grad.addColorStop(0.5, '#1e1b4b');
+        grad.addColorStop(1, '#020617');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 1280, 720);
+
+        // Header
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 28px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(meetingTitle || 'Patterns Team Meeting', 640, 240);
+
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '16px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.fillText(`Live Conference Active • ${totalCount} participant${totalCount !== 1 ? 's' : ''}`, 640, 280);
+
+        // Recording indicator
+        ctx.fillStyle = '#ef4444';
+        ctx.beginPath();
+        ctx.arc(615, 330, 7, 0, 2 * Math.PI);
+        ctx.fill();
+
+        ctx.fillStyle = '#f87171';
+        ctx.font = 'bold 16px monospace';
+        ctx.textAlign = 'left';
+        ctx.fillText(`REC ${formatDuration(recordingDuration)}`, 630, 335);
+
+        // Animated soundwave bars
+        ctx.fillStyle = '#818cf8';
+        const barCount = 18;
+        const startX = 640 - (barCount * 14) / 2;
+        for (let i = 0; i < barCount; i++) {
+          const barH = 12 + Math.abs(Math.sin((frameCount * 0.1) + i * 0.4)) * 40;
+          ctx.beginPath();
+          ctx.roundRect(startX + i * 14, 420 - barH / 2, 8, barH, 4);
+          ctx.fill();
+        }
+
+        ctx.textAlign = 'left';
+      }
+
+      renderFrame();
+
+      // 6. Capture Stream from Canvas (Guaranteed 30 FPS Video Track!)
+      const canvasStream = canvas.captureStream(30);
+      const canvasVideoTrack = canvasStream.getVideoTracks()[0];
+
       const recordStream = new MediaStream();
+      if (canvasVideoTrack) recordStream.addTrack(canvasVideoTrack);
       const mixedAudioTrack = dest.stream.getAudioTracks()[0];
       if (mixedAudioTrack) recordStream.addTrack(mixedAudioTrack);
 
-      // Video track: If sharing screen or someone else is sharing screen or camera
-      const screenTrack = screenStreamRef.current?.getVideoTracks().find((t) => t.readyState === 'live');
-      const remoteScreenTrack = peersArray.find((p) => p.isScreenSharing)?.stream?.getVideoTracks().find((t) => t.readyState === 'live');
-      const localCameraTrack = localStreamRef.current?.getVideoTracks().find((t) => t.readyState === 'live');
-      const remoteCameraTrack = peersArray.find((p) => p.stream?.getVideoTracks().length)?.stream?.getVideoTracks().find((t) => t.readyState === 'live');
+      const candidateTypes = [
+        'video/webm;codecs=vp9,opus',
+        'video/webm;codecs=vp8,opus',
+        'video/webm',
+        'video/mp4',
+      ];
+      let mimeType = 'video/webm';
+      for (const t of candidateTypes) {
+        if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) {
+          mimeType = t;
+          break;
+        }
+      }
 
-      const videoTrackToRecord = screenTrack || remoteScreenTrack || localCameraTrack || remoteCameraTrack;
-      if (videoTrackToRecord) recordStream.addTrack(videoTrackToRecord);
-
-      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
-        ? 'video/webm;codecs=vp9,opus'
-        : MediaRecorder.isTypeSupported('video/webm;codecs=vp8,opus')
-        ? 'video/webm;codecs=vp8,opus'
-        : 'video/webm';
-
-      const mr = new MediaRecorder(recordStream, { mimeType });
-      mr.ondataavailable = (e) => { if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data); };
-      mr.onstop = () => {
-        const hasVideo = recordStream.getVideoTracks().length > 0;
-        const blob = new Blob(recordedChunksRef.current, { type: hasVideo ? mimeType : 'audio/webm' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `meeting-${meetingTitle.replace(/\s+/g, '_')}-${Date.now()}.webm`;
-        a.click();
-        URL.revokeObjectURL(url);
-        audioCtx.close().catch(() => {});
+      const mr = new MediaRecorder(recordStream, { mimeType, videoBitsPerSecond: 2500000 });
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) recordedChunksRef.current.push(e.data);
       };
+
+      mr.onstop = () => {
+        if (recordingAnimRef.current) {
+          cancelAnimationFrame(recordingAnimRef.current);
+          recordingAnimRef.current = null;
+        }
+        if (recordingVideoElRef.current) {
+          recordingVideoElRef.current.srcObject = null;
+          recordingVideoElRef.current = null;
+        }
+        if (recordingAudioCtxRef.current) {
+          try { recordingAudioCtxRef.current.close(); } catch (e) {}
+          recordingAudioCtxRef.current = null;
+        }
+
+        const blob = new Blob(recordedChunksRef.current, { type: mimeType });
+        if (blob.size > 0) {
+          const url = URL.createObjectURL(blob);
+          const safeTitle = (meetingTitle || 'team-meeting').replace(/[^a-zA-Z0-9_-]/g, '_');
+          const fileName = `meeting-${safeTitle}-${Date.now()}.webm`;
+
+          // Automatic device download!
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = fileName;
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(() => {
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          }, 3000);
+
+          addSystemChat(`Meeting recording automatically downloaded to your device as "${fileName}"! 🎬`);
+        }
+      };
+
       mr.start(1000);
       mediaRecorderRef.current = mr;
       setIsRecording(true);
       setRecordingDuration(0);
       recordingTimerRef.current = setInterval(() => setRecordingDuration((p) => p + 1), 1000);
       socket.emit('meeting_media_toggle', { meetingId, isRecording: true });
+      addSystemChat(`${user.name} started recording the meeting.`);
     } catch (err) {
       console.error('Failed to start recording:', err);
     }
@@ -952,11 +1156,16 @@ export function GroupMeetingOverlay({
 
   function stopRecording() {
     if (!isRecording || !mediaRecorderRef.current) return;
-    mediaRecorderRef.current.stop();
+    try {
+      if (mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+    } catch (e) {}
     mediaRecorderRef.current = null;
     setIsRecording(false);
     if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
     socket.emit('meeting_media_toggle', { meetingId, isRecording: false });
+    addSystemChat(`${user.name} stopped recording.`);
   }
 
   // ── In-Meeting Chat ────────────────────────────────────────────
