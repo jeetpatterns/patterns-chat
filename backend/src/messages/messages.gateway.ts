@@ -431,6 +431,10 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
       isVideo?: boolean;
       signalData?: any;
       meetingId?: string; // Optional: if set, recipient joins group meeting overlay
+      meetingTitle?: string;
+      channelId?: string;
+      channelName?: string;
+      isGroupCall?: boolean;
     },
   ) {
     if (data?.toUserId) {
@@ -439,7 +443,11 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
         from: data.caller,
         isVideo: !!data.isVideo,
         signalData: data.signalData,
-        meetingId: data.meetingId, // Forward meetingId to auto-join group meeting
+        meetingId: data.meetingId,
+        meetingTitle: data.meetingTitle,
+        channelId: data.channelId,
+        channelName: data.channelName,
+        isGroupCall: !!data.isGroupCall || !!data.meetingId,
       });
       this.logger.log(`📞 Call initiated from ${data.caller?.name} to user ${data.toUserId}${data.meetingId ? ` (group meeting: ${data.meetingId})` : ''}`);
 
@@ -452,6 +460,38 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
         this.server.emit('presence_updated', { id: data.caller.id, presence: PresenceStatus.BUSY });
       }
     }
+  }
+
+  @SubscribeMessage('ring_channel_meeting')
+  handleRingChannelMeeting(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: {
+      channelId: string;
+      channelName: string;
+      meetingId: string;
+      meetingTitle?: string;
+      caller: { id: string; name: string; avatarUrl?: string };
+      targetUserIds: string[];
+    },
+  ) {
+    if (!data?.meetingId || !data?.targetUserIds?.length) return;
+
+    for (const uid of data.targetUserIds) {
+      if (uid && uid !== data.caller?.id) {
+        const room = `user:${uid}`;
+        client.to(room).emit('incoming_call', {
+          from: data.caller,
+          isVideo: true,
+          meetingId: data.meetingId,
+          meetingTitle: data.meetingTitle || `#${data.channelName} Team Meeting`,
+          channelId: data.channelId,
+          channelName: data.channelName,
+          isGroupCall: true,
+        });
+      }
+    }
+    this.logger.log(`📞 Group meeting ring broadcast to ${data.targetUserIds.length} members in #${data.channelName}`);
   }
 
   @SubscribeMessage('answer_call')
@@ -541,28 +581,42 @@ export class MessagesGateway implements OnGatewayConnection, OnGatewayDisconnect
     @ConnectedSocket() client: Socket,
     @MessageBody()
     data: {
-      toUserId: string;
+      toUserId?: string;
+      meetingId?: string;
     },
   ) {
+    const decliningUserId = this.socketToUserMap.get(client.id);
+
     if (data?.toUserId) {
       const room = `user:${data.toUserId}`;
-      client.to(room).emit('call_declined');
+      client.to(room).emit('call_declined', {
+        fromUserId: decliningUserId,
+        meetingId: data.meetingId,
+      });
       this.logger.log(`📞 Call declined for user ${data.toUserId}`);
+    }
 
-      const userA = this.socketToUserMap.get(client.id);
-      const userB = data.toUserId;
-      const usersToRestore = [userA, userB].filter(Boolean) as string[];
+    if (data?.meetingId) {
+      const meetingRoom = `meeting:${data.meetingId}`;
+      client.to(meetingRoom).emit('peer_meeting_declined', {
+        userId: decliningUserId,
+        meetingId: data.meetingId,
+      });
+    }
 
-      for (const uid of usersToRestore) {
-        this.userManualPresenceMap.set(uid, PresenceStatus.ONLINE);
-        try {
-          await this.prisma.user.update({
-            where: { id: uid },
-            data: { presence: PresenceStatus.ONLINE },
-          });
-        } catch {}
-        this.server.emit('presence_updated', { id: uid, presence: PresenceStatus.ONLINE });
-      }
+    const userA = client.id ? this.socketToUserMap.get(client.id) : undefined;
+    const userB = data?.toUserId;
+    const usersToRestore = [userA, userB].filter(Boolean) as string[];
+
+    for (const uid of usersToRestore) {
+      this.userManualPresenceMap.set(uid, PresenceStatus.ONLINE);
+      try {
+        await this.prisma.user.update({
+          where: { id: uid },
+          data: { presence: PresenceStatus.ONLINE },
+        });
+      } catch {}
+      this.server.emit('presence_updated', { id: uid, presence: PresenceStatus.ONLINE });
     }
   }
 

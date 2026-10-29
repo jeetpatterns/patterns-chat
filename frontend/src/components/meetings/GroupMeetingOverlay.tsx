@@ -30,6 +30,8 @@ import {
   Hand,
   MoreVertical,
   Copy,
+  PhoneCall,
+  Phone,
 } from 'lucide-react';
 import { User, WorkspaceRole } from '@/types/auth';
 import { ROLE_CONFIGS } from '@/lib/roles';
@@ -72,6 +74,7 @@ interface GroupMeetingOverlayProps {
   meetingId: string;
   meetingTitle: string;
   channelName?: string;
+  channelId?: string;
   workspaceId: string;
   user: User;
   userRole?: WorkspaceRole;
@@ -111,6 +114,7 @@ export function GroupMeetingOverlay({
   meetingId,
   meetingTitle,
   channelName,
+  channelId,
   workspaceId,
   user,
   userRole,
@@ -151,9 +155,12 @@ export function GroupMeetingOverlay({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
 
-  // ── Invite State ───────────────────────────────────────────────
+  // ── Invite & Ringing State ──────────────────────────────────────
   const [inviteSearch, setInviteSearch] = useState('');
   const [invitedIds, setInvitedIds] = useState<Set<string>>(new Set());
+  const [ringingMemberMap, setRingingMemberMap] = useState<
+    Map<string, { status: 'ringing' | 'declined' | 'disconnected' | 'invited'; timestamp: number }>
+  >(new Map());
 
   // ── Audio Output ───────────────────────────────────────────────
   const [audioDevices, setAudioDevices] = useState<MediaDeviceInfo[]>([]);
@@ -283,6 +290,15 @@ export function GroupMeetingOverlay({
       createPeerConnection(data.socketId, data.user, false);
       addSystemChat(`${data.user.name} joined the meeting`);
 
+      // Clear ringing state since user is now connected
+      if (data.user?.id) {
+        setRingingMemberMap((prev) => {
+          const next = new Map(prev);
+          next.delete(data.user.id);
+          return next;
+        });
+      }
+
       // If we are currently sharing our screen or have media states toggled, notify newcomer
       if (screenStreamRef.current) {
         socket.emit('meeting_media_toggle', {
@@ -343,11 +359,32 @@ export function GroupMeetingOverlay({
       setRemotePeers((prev) => {
         const next = new Map(prev);
         const leaving = next.get(data.socketId);
-        if (leaving) addSystemChat(`${leaving.user.name} left the meeting`);
+        if (leaving) {
+          addSystemChat(`${leaving.user.name} left the meeting`);
+          if (leaving.user?.id) {
+            setRingingMemberMap((rmap) => {
+              const nextMap = new Map(rmap);
+              nextMap.set(leaving.user.id, { status: 'disconnected', timestamp: Date.now() });
+              return nextMap;
+            });
+          }
+        }
         next.delete(data.socketId);
         return next;
       });
       if (pinnedSocketId === data.socketId) setPinnedSocketId(null);
+    }
+
+    function handlePeerMeetingDeclined(data: { userId?: string; meetingId?: string }) {
+      if (data?.userId) {
+        setRingingMemberMap((prev) => {
+          const next = new Map(prev);
+          next.set(data.userId!, { status: 'declined', timestamp: Date.now() });
+          return next;
+        });
+        const m = members.find((x) => x.id === data.userId);
+        if (m) addSystemChat(`${m.name} declined the call`);
+      }
     }
 
     function handlePeerMediaToggle(data: {
@@ -397,6 +434,7 @@ export function GroupMeetingOverlay({
     socket.on('user_joined_team_meeting', handleUserJoined);
     socket.on('meeting_peer_signal', handlePeerSignal);
     socket.on('user_left_team_meeting', handleUserLeft);
+    socket.on('peer_meeting_declined', handlePeerMeetingDeclined);
     socket.on('peer_media_toggle', handlePeerMediaToggle);
     socket.on('meeting_chat_message', handleMeetingChat);
 
@@ -405,6 +443,7 @@ export function GroupMeetingOverlay({
       socket.off('user_joined_team_meeting', handleUserJoined);
       socket.off('meeting_peer_signal', handlePeerSignal);
       socket.off('user_left_team_meeting', handleUserLeft);
+      socket.off('peer_meeting_declined', handlePeerMeetingDeclined);
       socket.off('peer_media_toggle', handlePeerMediaToggle);
       socket.off('meeting_chat_message', handleMeetingChat);
     };
@@ -936,15 +975,49 @@ export function GroupMeetingOverlay({
     setChatInput('');
   }
 
-  // ── Invite Members ─────────────────────────────────────────────
+  // ── Invite & Ring Members ───────────────────────────────────────
   function inviteMember(memberId: string, memberName: string) {
     socket.emit('call_user', {
       toUserId: memberId,
       caller: { id: user.id, name: user.name, avatarUrl: user.avatarUrl },
       isVideo: true,
       meetingId,
+      meetingTitle,
+      channelId,
+      channelName,
+      isGroupCall: true,
+    });
+    setRingingMemberMap((prev) => {
+      const next = new Map(prev);
+      next.set(memberId, { status: 'ringing', timestamp: Date.now() });
+      return next;
     });
     setInvitedIds((prev) => new Set([...prev, memberId]));
+    addSystemChat(`📞 Ringing ${memberName}...`);
+  }
+
+  function ringAllUnconnected() {
+    const unconnected = members.filter((m) => !peerUserIds.has(m.id) && m.id !== user.id);
+    if (unconnected.length === 0) return;
+
+    const targetUserIds = unconnected.map((m) => m.id);
+    socket.emit('ring_channel_meeting', {
+      channelId,
+      channelName: channelName || 'dev',
+      meetingId,
+      meetingTitle,
+      caller: { id: user.id, name: user.name, avatarUrl: user.avatarUrl },
+      targetUserIds,
+    });
+
+    setRingingMemberMap((prev) => {
+      const next = new Map(prev);
+      unconnected.forEach((m) => {
+        next.set(m.id, { status: 'ringing', timestamp: Date.now() });
+      });
+      return next;
+    });
+    addSystemChat(`📞 Ringing ${unconnected.length} members...`);
   }
 
   function copyMeetingLink() {
@@ -1206,33 +1279,84 @@ export function GroupMeetingOverlay({
 
             {/* Participants panel */}
             {activePanel === 'participants' && (
-              <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
-                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2 px-1">
-                  In Meeting — {totalCount}
-                </div>
-                {/* Self */}
-                <ParticipantRow
-                  name={`${user.name} (You)`}
-                  avatarUrl={user.avatarUrl}
-                  role={userRole}
-                  isMicMuted={isMicMuted}
-                  isVideoMuted={isVideoMuted}
-                  isScreenSharing={isScreenSharing}
-                  hasHandRaised={hasHandRaised}
-                />
-                {peersArray.map((peer) => (
+              <div className="flex-1 overflow-y-auto p-3 space-y-3">
+                <div>
+                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2 px-1">
+                    In Meeting — {totalCount}
+                  </div>
+                  {/* Self */}
                   <ParticipantRow
-                    key={peer.socketId}
-                    name={peer.user.name}
-                    avatarUrl={peer.user.avatarUrl}
-                    role={peer.user.role}
-                    isMicMuted={peer.isMicMuted}
-                    isVideoMuted={peer.isVideoMuted}
-                    isScreenSharing={peer.isScreenSharing}
-                    hasHandRaised={peer.hasHandRaised}
-                    onPin={() => { setPinnedSocketId(peer.socketId); setActivePanel('none'); }}
+                    name={`${user.name} (You)`}
+                    avatarUrl={user.avatarUrl}
+                    role={userRole}
+                    isMicMuted={isMicMuted}
+                    isVideoMuted={isVideoMuted}
+                    isScreenSharing={isScreenSharing}
+                    hasHandRaised={hasHandRaised}
                   />
-                ))}
+                  {peersArray.map((peer) => (
+                    <ParticipantRow
+                      key={peer.socketId}
+                      name={peer.user.name}
+                      avatarUrl={peer.user.avatarUrl}
+                      role={peer.user.role}
+                      isMicMuted={peer.isMicMuted}
+                      isVideoMuted={peer.isVideoMuted}
+                      isScreenSharing={peer.isScreenSharing}
+                      hasHandRaised={peer.hasHandRaised}
+                      onPin={() => { setPinnedSocketId(peer.socketId); setActivePanel('none'); }}
+                    />
+                  ))}
+                </div>
+
+                {filteredMembers.length > 0 && (
+                  <div className="pt-2 border-t border-white/10 space-y-2">
+                    <div className="flex items-center justify-between px-1">
+                      <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                        Not in Call — {filteredMembers.length}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={ringAllUnconnected}
+                        className="text-[10px] font-bold text-violet-400 hover:text-violet-300 transition-colors cursor-pointer"
+                      >
+                        Ring All
+                      </button>
+                    </div>
+                    {filteredMembers.map((m) => {
+                      const ringingInfo = ringingMemberMap.get(m.id);
+                      const isRinging = ringingInfo?.status === 'ringing';
+                      return (
+                        <div
+                          key={m.id}
+                          className="flex items-center justify-between gap-2 p-2 rounded-xl bg-white/2 hover:bg-white/5 transition-colors"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <img
+                              src={m.avatarUrl || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(m.name)}`}
+                              alt={m.name}
+                              className="h-7 w-7 rounded-lg object-cover border border-white/10 shrink-0 opacity-60"
+                            />
+                            <div className="min-w-0">
+                              <p className="text-xs font-medium text-slate-300 truncate">{m.name}</p>
+                              <p className="text-[10px] text-slate-500">
+                                {isRinging ? 'Ringing...' : ringingInfo?.status === 'declined' ? 'Declined' : ringingInfo?.status === 'disconnected' ? 'Left call' : 'Not joined'}
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => inviteMember(m.id, m.name)}
+                            className="p-1.5 rounded-lg bg-white/10 hover:bg-violet-600 text-slate-300 hover:text-white transition-all cursor-pointer"
+                            title={isRinging ? 'Ring again' : 'Ring member'}
+                          >
+                            <PhoneCall className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
 
@@ -1315,14 +1439,26 @@ export function GroupMeetingOverlay({
                 <button
                   type="button"
                   onClick={copyMeetingLink}
-                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 text-violet-300 text-xs font-semibold transition-colors"
+                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/30 text-violet-300 text-xs font-semibold transition-colors cursor-pointer"
                 >
                   {copyLinkStatus ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
-                  {copyLinkStatus ? 'Link Copied!' : 'Copy Meeting Link'}
+                  <span>{copyLinkStatus ? 'Link Copied!' : 'Copy Meeting Link'}</span>
                 </button>
 
-                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                  Invite from Workspace
+                <div className="flex items-center justify-between">
+                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                    Ring Members ({filteredMembers.length})
+                  </div>
+                  {filteredMembers.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={ringAllUnconnected}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-[11px] font-bold shadow-xs transition-all cursor-pointer active:scale-95"
+                    >
+                      <PhoneCall className="w-3 h-3" />
+                      <span>Ring All ({filteredMembers.length})</span>
+                    </button>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2 bg-white/5 rounded-xl border border-white/10 px-3 py-2">
@@ -1331,46 +1467,72 @@ export function GroupMeetingOverlay({
                     type="text"
                     value={inviteSearch}
                     onChange={(e) => setInviteSearch(e.target.value)}
-                    placeholder="Search members..."
+                    placeholder="Search members to call..."
                     className="flex-1 bg-transparent text-xs text-slate-200 placeholder-slate-600 outline-none"
                   />
                 </div>
 
                 <div className="flex-1 overflow-y-auto space-y-1.5">
                   {filteredMembers.length === 0 && (
-                    <div className="text-center text-slate-600 text-xs py-6">
+                    <div className="text-center text-slate-500 text-xs py-6">
                       {members.length === 0 ? 'All members are in the call' : 'No members found'}
                     </div>
                   )}
-                  {filteredMembers.map((m) => (
-                    <div
-                      key={m.id}
-                      className="flex items-center gap-2.5 p-2.5 rounded-xl bg-white/3 hover:bg-white/6 transition-colors"
-                    >
-                      <img
-                        src={m.avatarUrl || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(m.name)}`}
-                        alt={m.name}
-                        className="h-8 w-8 rounded-lg object-cover border border-white/10 shrink-0"
-                      />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-xs font-semibold text-slate-200 truncate">{m.name}</div>
-                        <div className="text-[10px] text-slate-500 truncate">{m.email}</div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => inviteMember(m.id, m.name)}
-                        disabled={invitedIds.has(m.id)}
-                        className={`shrink-0 p-1.5 rounded-lg text-xs font-semibold transition-all ${
-                          invitedIds.has(m.id)
-                            ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 cursor-not-allowed'
-                            : 'bg-violet-600 hover:bg-violet-500 text-white'
-                        }`}
-                        title={invitedIds.has(m.id) ? 'Invite sent' : 'Invite to meeting'}
+                  {filteredMembers.map((m) => {
+                    const ringingInfo = ringingMemberMap.get(m.id);
+                    const isRinging = ringingInfo?.status === 'ringing';
+                    const isDeclined = ringingInfo?.status === 'declined';
+                    const isDisconnected = ringingInfo?.status === 'disconnected';
+
+                    return (
+                      <div
+                        key={m.id}
+                        className="flex items-center gap-2.5 p-2.5 rounded-xl bg-white/3 hover:bg-white/6 transition-colors"
                       >
-                        {invitedIds.has(m.id) ? <Check className="h-3.5 w-3.5" /> : <UserPlus className="h-3.5 w-3.5" />}
-                      </button>
-                    </div>
-                  ))}
+                        <img
+                          src={m.avatarUrl || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(m.name)}`}
+                          alt={m.name}
+                          className="h-8 w-8 rounded-lg object-cover border border-white/10 shrink-0"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-semibold text-slate-200 truncate">{m.name}</span>
+                            {isRinging && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 animate-pulse">
+                                Ringing...
+                              </span>
+                            )}
+                            {isDeclined && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                                Declined
+                              </span>
+                            )}
+                            {isDisconnected && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-slate-500/20 text-slate-400 border border-slate-500/30">
+                                Left Call
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-slate-500 truncate">{m.email}</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => inviteMember(m.id, m.name)}
+                          className={`shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer active:scale-95 shadow-xs ${
+                            isRinging
+                              ? 'bg-amber-600 hover:bg-amber-500 text-white'
+                              : isDeclined || isDisconnected
+                              ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                              : 'bg-violet-600 hover:bg-violet-500 text-white'
+                          }`}
+                          title={isRinging ? 'Call again (already ringing)' : 'Ring user to join call'}
+                        >
+                          <PhoneCall className="h-3.5 w-3.5" />
+                          <span>{isRinging || isDeclined || isDisconnected ? 'Ring Again' : 'Call'}</span>
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}

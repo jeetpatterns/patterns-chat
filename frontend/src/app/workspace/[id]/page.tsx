@@ -581,6 +581,10 @@ function WorkspaceShellContent() {
     isVideo: boolean;
     signalData: any;
     meetingId?: string;
+    meetingTitle?: string;
+    channelId?: string;
+    channelName?: string;
+    isGroupCall?: boolean;
   } | null>(null);
   const [callDuration, setCallDuration] = useState(0);
   const [isMicMuted, setIsMicMuted] = useState(false);
@@ -3888,13 +3892,15 @@ function WorkspaceShellContent() {
       setActiveTeamMeeting({
         id: incomingCall.meetingId,
         workspaceId: workspaceId || '',
-        title: `Team Meeting`,
+        title: incomingCall.meetingTitle || (incomingCall.channelName ? `#${incomingCall.channelName} Team Meeting` : 'Team Meeting'),
         scheduledAt: new Date().toISOString(),
         duration: 60,
         hostId: caller.id,
+        channelId: incomingCall.channelId,
         status: 'LIVE' as const,
         createdAt: new Date().toISOString(),
         host: { id: caller.id, name: caller.name, email: '' },
+        channel: incomingCall.channelId && incomingCall.channelName ? { id: incomingCall.channelId, name: incomingCall.channelName } : undefined,
         participants: [],
       });
       cleanupCall(false);
@@ -4056,7 +4062,10 @@ function WorkspaceShellContent() {
     }
     if (incomingCall?.from?.id) {
       const socket = getSocket();
-      socket.emit('decline_call', { toUserId: incomingCall.from.id });
+      socket.emit('decline_call', {
+        toUserId: incomingCall.from.id,
+        meetingId: incomingCall.meetingId,
+      });
     }
     setIncomingCall(null);
     setCallStatus('idle');
@@ -4669,40 +4678,25 @@ function WorkspaceShellContent() {
       isVideo: boolean;
       signalData: any;
       meetingId?: string;
+      meetingTitle?: string;
+      channelId?: string;
+      channelName?: string;
+      isGroupCall?: boolean;
     }) {
-      // If this is a group meeting invite (has meetingId) — join group meeting directly
-      if (data.meetingId) {
-        stopRingTone();
-        setActiveTeamMeeting({
-          id: data.meetingId,
-          workspaceId: workspaceId || '',
-          title: `Meeting with ${data.from.name}`,
-          scheduledAt: new Date().toISOString(),
-          duration: 60,
-          hostId: data.from.id,
-          status: 'LIVE' as const,
-          createdAt: new Date().toISOString(),
-          host: { id: data.from.id, name: data.from.name, email: '' },
-          participants: [],
-        });
-        // Show system notification
-        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-          try {
-            new Notification(`📹 ${data.from.name} invited you to a group meeting`, {
-              body: 'Click to join the team video meeting now',
-              icon: data.from.avatarUrl,
-              requireInteraction: false,
-            });
-          } catch { /* silent */ }
-        }
-        return;
-      }
-
       if (callStatusRef.current !== 'idle') {
-        socket.emit('decline_call', { toUserId: data.from.id });
+        socket.emit('decline_call', { toUserId: data.from.id, meetingId: data.meetingId });
         return;
       }
-      setIncomingCall(data);
+      setIncomingCall({
+        from: data.from,
+        isVideo: data.isVideo,
+        signalData: data.signalData,
+        meetingId: data.meetingId,
+        meetingTitle: data.meetingTitle,
+        channelId: data.channelId,
+        channelName: data.channelName,
+        isGroupCall: !!data.meetingId || !!data.isGroupCall,
+      });
       setCallPeer(data.from);
       setCallType(data.isVideo ? 'video' : 'audio');
       setCallStatus('incoming');
@@ -4712,7 +4706,14 @@ function WorkspaceShellContent() {
       // Trigger Cross-App System-Level Desktop Notification (Visible in Windows Action Center & over Excel, Chrome, etc.)
       try {
         const callerName = data.from.name || 'Team member';
+        const isGroup = !!data.meetingId || !!data.isGroupCall;
         const callKind = data.isVideo ? 'Video' : 'Voice';
+        const titleText = isGroup
+          ? `📞 Incoming Team Call: #${data.channelName || 'dev'} from ${callerName}`
+          : `📞 Incoming ${callKind} Call: ${callerName}`;
+        const bodyText = isGroup
+          ? `${callerName} started a live group video meeting in #${data.channelName || 'channel'}. Click to Join or Decline!`
+          : `${callerName} is calling you. Click here to answer or view call immediately!`;
 
         if (typeof window !== 'undefined' && 'Notification' in window) {
           const triggerNotif = () => {
@@ -4720,8 +4721,8 @@ function WorkspaceShellContent() {
               if (incomingCallNotifRef.current) {
                 incomingCallNotifRef.current.close();
               }
-              const notif = new Notification(`📞 Incoming ${callKind} Call: ${callerName}`, {
-                body: `${callerName} is calling you. Click here to answer or view call immediately!`,
+              const notif = new Notification(titleText, {
+                body: bodyText,
                 icon: data.from.avatarUrl || '/icons/call-ringing.png',
                 tag: 'teamflow-incoming-call',
                 requireInteraction: true, // Remains visible on Windows/Mac screen until clicked
@@ -10820,6 +10821,10 @@ function WorkspaceShellContent() {
               <button
                 type="button"
                 onClick={() => {
+                  const targetList = (!activeChannel.isPrivate
+                    ? members
+                    : (activeChannelMembers.length > 0 ? activeChannelMembers : members)
+                  );
                   const instantMeeting: Meeting = {
                     id: `meeting-${activeChannel.id}`,
                     workspaceId,
@@ -10833,16 +10838,33 @@ function WorkspaceShellContent() {
                     createdAt: new Date().toISOString(),
                     host: user ? { id: user.id, name: user.name, email: user.email, avatarUrl: user.avatarUrl } : { id: '', name: 'Host', email: '' },
                     channel: { id: activeChannel.id, name: activeChannel.name },
-                    participants: members.map((m) => ({
+                    participants: targetList.map((m) => ({
                       id: `p-${m.id}`,
                       meetingId: `meeting-${activeChannel.id}`,
                       userId: m.user.id,
-                      role: m.role || 'MEMBER',
+                      role: ((m as any).role as WorkspaceRole) || 'MEMBER',
                       status: 'ACCEPTED' as const,
                       user: m.user,
                     })),
                   };
                   setActiveTeamMeeting(instantMeeting);
+
+                  // Ring all other channel members!
+                  const targetUserIds = targetList
+                    .map((m) => m.user.id)
+                    .filter((id) => id !== user?.id);
+
+                  if (targetUserIds.length > 0 && user) {
+                    const socket = getSocket();
+                    socket.emit('ring_channel_meeting', {
+                      channelId: activeChannel.id,
+                      channelName: activeChannel.name,
+                      meetingId: instantMeeting.id,
+                      meetingTitle: instantMeeting.title,
+                      caller: { id: user.id, name: user.name, avatarUrl: user.avatarUrl },
+                      targetUserIds,
+                    });
+                  }
                 }}
                 className="h-8.5 flex items-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white px-3 text-xs font-semibold transition-all shadow-xs shrink-0 active:scale-95 cursor-pointer"
                 title="Start or join Team Video Meeting"
@@ -14662,7 +14684,7 @@ function WorkspaceShellContent() {
                 className="h-24 w-24 rounded-full object-cover border-4 border-slate-700 relative z-10 shadow-xl"
               />
               <div className="absolute bottom-0 right-0 z-20 h-7 w-7 rounded-full bg-emerald-500 border-2 border-slate-900 flex items-center justify-center shadow-md">
-                {incomingCall.isVideo ? (
+                {incomingCall.isVideo || incomingCall.isGroupCall || incomingCall.meetingId ? (
                   <Video className="h-3.5 w-3.5 text-white" />
                 ) : (
                   <Phone className="h-3.5 w-3.5 text-white" />
@@ -14671,19 +14693,37 @@ function WorkspaceShellContent() {
             </div>
 
             <h3 className="font-bold text-lg text-white mt-1">{incomingCall.from.name}</h3>
-            <p className="text-xs text-slate-400 mt-1">
-              Incoming {incomingCall.isVideo ? 'Video' : 'Audio'} Call...
-            </p>
-            <p className="text-[10px] text-slate-500 mt-2 bg-slate-800/60 px-3 py-1 rounded-full border border-slate-700/50">
-              {incomingCall.isVideo ? 'Microphone & Camera (or Mic only if no camera)' : 'Microphone permission required'}
-            </p>
+
+            {incomingCall.isGroupCall || incomingCall.meetingId ? (
+              <div className="space-y-1.5 mt-1">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 text-xs font-bold">
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Team Meeting • #{incomingCall.channelName || activeChannel?.name || 'dev'}</span>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Incoming Team Video Meeting Call...
+                </p>
+                <p className="text-[10px] text-slate-500 bg-slate-800/60 px-3 py-1 rounded-full border border-slate-700/50">
+                  Join teammates in live group video conference
+                </p>
+              </div>
+            ) : (
+              <>
+                <p className="text-xs text-slate-400 mt-1">
+                  Incoming {incomingCall.isVideo ? 'Video' : 'Audio'} Call...
+                </p>
+                <p className="text-[10px] text-slate-500 mt-2 bg-slate-800/60 px-3 py-1 rounded-full border border-slate-700/50">
+                  {incomingCall.isVideo ? 'Microphone & Camera (or Mic only if no camera)' : 'Microphone permission required'}
+                </p>
+              </>
+            )}
 
             {/* Answer / Decline buttons */}
             <div className="mt-8 flex items-center gap-4 w-full">
               <button
                 type="button"
                 onClick={handleDeclineCall}
-                className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-rose-600/90 hover:bg-rose-600 text-white font-semibold text-xs shadow-lg shadow-rose-600/30 transition-all hover:scale-102 active:scale-98"
+                className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-rose-600/90 hover:bg-rose-600 text-white font-semibold text-xs shadow-lg shadow-rose-600/30 transition-all hover:scale-102 active:scale-98 cursor-pointer"
               >
                 <PhoneOff className="h-4 w-4" />
                 <span>Decline</span>
@@ -14692,10 +14732,19 @@ function WorkspaceShellContent() {
               <button
                 type="button"
                 onClick={handleAcceptCall}
-                className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-lg shadow-emerald-600/40 transition-all hover:scale-102 active:scale-98 animate-pulse"
+                className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-lg shadow-emerald-600/40 transition-all hover:scale-102 active:scale-98 animate-pulse cursor-pointer"
               >
-                <PhoneCall className="h-4 w-4" />
-                <span>Accept</span>
+                {incomingCall.isGroupCall || incomingCall.meetingId ? (
+                  <>
+                    <Video className="h-4 w-4" />
+                    <span>Join Meeting</span>
+                  </>
+                ) : (
+                  <>
+                    <PhoneCall className="h-4 w-4" />
+                    <span>Accept</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -15213,17 +15262,18 @@ function WorkspaceShellContent() {
         <GroupMeetingOverlay
           meetingId={activeTeamMeeting.id}
           meetingTitle={activeTeamMeeting.title}
+          channelId={activeTeamMeeting.channel?.id || activeChannel?.id}
           channelName={activeTeamMeeting.channel?.name || activeChannel?.name}
           workspaceId={workspaceId}
           user={user}
           userRole={currentUserRole || 'MEMBER'}
           socket={getSocket()}
-          members={members.map((m) => ({
+          members={(!activeChannel?.isPrivate ? members : (activeChannelMembers.length > 0 ? activeChannelMembers : members)).map((m) => ({
             id: m.user.id,
             name: m.user.name,
             email: m.user.email,
             avatarUrl: m.user.avatarUrl,
-            role: m.role,
+            role: ((m as any).role as WorkspaceRole) || 'MEMBER',
           }))}
           onLeaveMeeting={() => {
             setActiveTeamMeeting(null);
